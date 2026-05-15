@@ -45,7 +45,7 @@ def configure_logging(loglevel: str = "WARNING") -> None:
 
     Call once from ``main()`` after command-line args are parsed.  Kept
     out of module import so that consumers of ``zeeref.config`` (such as
-    the ``zeeref-add`` CLI's import chain) don't parse ``sys.argv`` at
+    the ``zeeref-cli`` import chain) don't parse ``sys.argv`` at
     import time.
     """
     logging_conf = {

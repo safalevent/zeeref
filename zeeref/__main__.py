@@ -210,6 +210,9 @@ def main():
         session_server = SessionServer(
             session_name=args.session,
             insert_fn=bee.view.do_insert_images_with_callback,
+            new_fn=bee.view.do_new_scene_with_callback,
+            open_fn=bee.view.do_open_with_callback,
+            status_fn=bee.view.get_session_status,
         )
         if not session_server.start():
             print(

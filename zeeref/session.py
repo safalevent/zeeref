@@ -17,22 +17,38 @@
 
 When ZeeRef is started with ``--session <name>``, a
 :class:`SessionServer` listens for local IPC connections via
-:class:`QLocalServer`.  A lightweight client (``zeeref-add``) connects
-with :class:`QLocalSocket` and sends JSON messages to insert images
-into the running scene.
+:class:`QLocalServer`.  A lightweight client (``zeeref-cli``) connects
+with :class:`QLocalSocket` and exchanges JSON messages.
 
 Transport differs by platform (Qt handles the translation):
   * Linux/macOS: AF_UNIX socket at ``$XDG_RUNTIME_DIR/zeeref-<name>``
     (falls back to ``$TMPDIR``).
   * Windows: named pipe at ``\\\\.\\pipe\\zeeref-<name>``.
 
-Wire protocol (one JSON object per line, ``\\n``-terminated)::
+Wire protocol (one JSON object per line, ``\\n``-terminated).  Server
+sends a ``hello`` greeting immediately on connect; clients should read
+it before sending::
 
-    Client:  {"type": "add", "payload": [{"path": "...", ...}]}
-    Server:  {"type": "ok"} | {"type": "error", "message": "..."}
+    Server (on connect): {"type": "hello", "protocol_version": 1,
+                          "app_version": "..."}
 
-    Client:  {"type": "ping"}
-    Server:  {"type": "pong"}
+    Client: {"type": "ping"}
+    Server: {"type": "pong"}
+
+    Client: {"type": "add", "payload": [{"path": "...", ...}]}
+    Server: {"type": "ok"} | {"type": "error", "message": "..."}
+
+    Client: {"type": "new", "force": false}
+    Server: {"type": "ok"} | {"type": "error", "message": "..."}
+
+    Client: {"type": "open", "path": "...", "force": false}
+    Server: {"type": "ok"} | {"type": "error", "message": "..."}
+
+    Client: {"type": "status"}
+    Server: {"type": "status_info", "loaded_file": "..." | null,
+             "item_count": N, "dirty": bool}
+
+Bump ``PROTOCOL_VERSION`` on any wire-incompatible change.
 """
 
 from __future__ import annotations
@@ -50,9 +66,13 @@ from typing import cast
 
 from PyQt6 import QtCore, QtNetwork
 
+from zeeref import constants
 from zeeref.fileio.io import ImageInsert
 
 logger = logging.getLogger(__name__)
+
+
+PROTOCOL_VERSION = 1
 
 
 # -- Messages --------------------------------------------------------------
@@ -81,6 +101,30 @@ class PingMessage(ClientMessage):
 
 
 @dataclasses.dataclass(frozen=True)
+class NewMessage(ClientMessage):
+    """Reset scene to empty."""
+
+    type: str = "new"
+    force: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class OpenMessage(ClientMessage):
+    """Open a .zref file in the running session."""
+
+    type: str = "open"
+    path: str = ""
+    force: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class StatusRequestMessage(ClientMessage):
+    """Request session status info."""
+
+    type: str = "status"
+
+
+@dataclasses.dataclass(frozen=True)
 class ServerMessage:
     """Base class for messages sent by the server."""
 
@@ -104,6 +148,21 @@ class ErrorMessage(ServerMessage):
 @dataclasses.dataclass(frozen=True)
 class PongMessage(ServerMessage):
     type: str = "pong"
+
+
+@dataclasses.dataclass(frozen=True)
+class HelloMessage(ServerMessage):
+    type: str = "hello"
+    protocol_version: int = PROTOCOL_VERSION
+    app_version: str = ""
+
+
+@dataclasses.dataclass(frozen=True)
+class StatusInfoMessage(ServerMessage):
+    type: str = "status_info"
+    loaded_file: str | None = None
+    item_count: int = 0
+    dirty: bool = False
 
 
 # -- Parsing ----------------------------------------------------------------
@@ -169,6 +228,24 @@ def parse_message(line: str) -> ClientMessage | ErrorMessage:
     if msg_type == "ping":
         return PingMessage()
 
+    if msg_type == "status":
+        return StatusRequestMessage()
+
+    if msg_type == "new":
+        force = msg.get("force", False)
+        if not isinstance(force, bool):
+            return ErrorMessage(message="'force' must be a boolean")
+        return NewMessage(force=force)
+
+    if msg_type == "open":
+        path = msg.get("path")
+        if not isinstance(path, str) or not path:
+            return ErrorMessage(message="'open' requires 'path' string")
+        force = msg.get("force", False)
+        if not isinstance(force, bool):
+            return ErrorMessage(message="'force' must be a boolean")
+        return OpenMessage(path=path, force=force)
+
     if msg_type == "add":
         payload = msg.get("payload")
         if not isinstance(payload, list) or not payload:
@@ -194,21 +271,32 @@ def parse_message(line: str) -> ClientMessage | ErrorMessage:
 
 
 class SessionServer(QtCore.QObject):
-    """QLocalServer that accepts JSON messages over a named Unix socket."""
+    """QLocalServer that accepts JSON messages over a named Unix socket.
+
+    Mutating operations (add/new/open) are serialized through a single
+    queue so they don't race against each other on the scene.  Reads
+    (status/ping) bypass the queue.
+    """
 
     def __init__(
         self,
         session_name: str,
-        insert_fn: Callable[[list[ImageInsert], Callable], None],
+        insert_fn: Callable[[list[ImageInsert], Callable[[list[str]], None]], None],
+        new_fn: Callable[[bool, Callable[[list[str]], None]], None],
+        open_fn: Callable[[Path, bool, Callable[[list[str]], None]], None],
+        status_fn: Callable[[], StatusInfoMessage],
         parent: QtCore.QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._session_name = session_name
         self._insert_fn = insert_fn
+        self._new_fn = new_fn
+        self._open_fn = open_fn
+        self._status_fn = status_fn
         self._server = QtNetwork.QLocalServer(self)
         self._server.newConnection.connect(self._on_new_connection)
         self._connections: list[_SessionConnection] = []
-        self._queue: deque[tuple[AddMessage, _SessionConnection]] = deque()
+        self._queue: deque[tuple[ClientMessage, _SessionConnection]] = deque()
         self._busy = False
 
     def start(self) -> bool:
@@ -244,31 +332,51 @@ class SessionServer(QtCore.QObject):
             socket = self._server.nextPendingConnection()
             if socket is None:
                 continue
-            conn = _SessionConnection(socket, self._on_add, self)
+            conn = _SessionConnection(socket, self._on_client_message, self)
             self._connections.append(conn)
+            conn.reply(HelloMessage(app_version=constants.VERSION))
 
-    def _on_add(self, msg: AddMessage, conn: _SessionConnection) -> None:
-        """Called by a connection when it parses a valid add message."""
-        self._queue.append((msg, conn))
-        self._process_queue()
+    def _on_client_message(self, msg: ClientMessage, conn: _SessionConnection) -> None:
+        """Dispatch a parsed client message.
+
+        Reads reply inline; mutations get queued for serial processing.
+        """
+        if isinstance(msg, StatusRequestMessage):
+            conn.reply(self._status_fn())
+            return
+        if isinstance(msg, (AddMessage, NewMessage, OpenMessage)):
+            self._queue.append((msg, conn))
+            self._process_queue()
+            return
+        # Unknown — shouldn't reach here since parse_message guards.
+        conn.reply(ErrorMessage(message=f"unhandled message type: {msg.type}"))
 
     def _process_queue(self) -> None:
         if self._busy or not self._queue:
             return
         self._busy = True
         msg, conn = self._queue[0]
-        logger.info("Session: inserting %d image(s)", len(msg.images))
-        self._insert_fn(list(msg.images), self._on_insert_finished)
+        if isinstance(msg, AddMessage):
+            logger.info("Session: inserting %d image(s)", len(msg.images))
+            self._insert_fn(list(msg.images), self._on_op_finished)
+        elif isinstance(msg, NewMessage):
+            logger.info("Session: new scene (force=%s)", msg.force)
+            self._new_fn(msg.force, self._on_op_finished)
+        elif isinstance(msg, OpenMessage):
+            logger.info("Session: opening %s (force=%s)", msg.path, msg.force)
+            self._open_fn(Path(msg.path), msg.force, self._on_op_finished)
+        else:
+            # Defensive — should be unreachable.
+            self._busy = False
+            self._queue.popleft()
+            conn.reply(ErrorMessage(message=f"unqueueable message: {msg.type}"))
+            self._process_queue()
 
-    def _on_insert_finished(self, errors: list[str]) -> None:
+    def _on_op_finished(self, errors: list[str]) -> None:
         self._busy = False
         msg, conn = self._queue.popleft()
         if errors:
-            conn.reply(
-                ErrorMessage(
-                    message=f"{len(errors)} file(s) failed: {', '.join(errors)}"
-                )
-            )
+            conn.reply(ErrorMessage(message="; ".join(errors)))
         else:
             conn.reply(OkMessage())
         self._process_queue()
@@ -284,12 +392,12 @@ class _SessionConnection(QtCore.QObject):
     def __init__(
         self,
         socket: QtNetwork.QLocalSocket,
-        on_add: Callable[[AddMessage, _SessionConnection], None],
+        on_message: Callable[[ClientMessage, _SessionConnection], None],
         server: SessionServer,
     ) -> None:
         super().__init__(server)
         self._socket = socket
-        self._on_add = on_add
+        self._on_message = on_message
         self._server = server
         self._buf = b""
         socket.readyRead.connect(self._on_ready_read)
@@ -320,8 +428,8 @@ class _SessionConnection(QtCore.QObject):
             self.reply(result)
         elif isinstance(result, PingMessage):
             self.reply(PongMessage())
-        elif isinstance(result, AddMessage):
-            self._on_add(result, self)
+        else:
+            self._on_message(result, self)
 
     def _on_disconnected(self) -> None:
         self._server._remove_connection(self)

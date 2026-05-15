@@ -21,7 +21,10 @@ import os
 import os.path
 from pathlib import Path
 from collections.abc import Callable, Sequence
-from typing import Any, cast
+from typing import Any, TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from zeeref.session import StatusInfoMessage
 
 from zeeref.logging import getLogger
 
@@ -89,6 +92,7 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
             widgets.welcome_overlay.WelcomeOverlay(vp)
         )
         self.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        self.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
         self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -803,6 +807,61 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
             self.scene,
             on_finished=_wrapped,
             dialog=DialogOptions(label="Loading images (session)"),
+        )
+
+    def do_new_scene_with_callback(
+        self,
+        force: bool,
+        on_done: Callable[[list[str]], None],
+    ) -> None:
+        """Reset scene to empty. Errors if dirty and not *force*.
+
+        Used by the session IPC server.
+        """
+        if not force and not self.undo_stack.isClean():
+            on_done(["session has unsaved changes; pass force=true to discard"])
+            return
+        self.clear_scene()
+        self.update_window_title()
+        on_done([])
+
+    def do_open_with_callback(
+        self,
+        filename: Path,
+        force: bool,
+        on_done: Callable[[list[str]], None],
+    ) -> None:
+        """Open *filename* into the running session. Errors if dirty
+        and not *force*, or if the file is missing.
+        """
+        if not force and not self.undo_stack.isClean():
+            on_done(["session has unsaved changes; pass force=true to discard"])
+            return
+        if not filename.is_file():
+            on_done([f"file not found: {filename}"])
+            return
+
+        def _wrapped(result: fileio.IOResult) -> None:
+            self.on_loading_finished(result)
+            on_done(list(result.errors) if result.errors else [])
+
+        self.clear_scene()
+        self.run_async(
+            fileio.load_zref_metadata,
+            filename,
+            self.scene,
+            on_finished=_wrapped,
+            dialog=DialogOptions(label=f"Loading {filename}"),
+        )
+
+    def get_session_status(self) -> StatusInfoMessage:
+        """Snapshot the scene for the session IPC server."""
+        from zeeref.session import StatusInfoMessage as _StatusInfoMessage
+
+        return _StatusInfoMessage(
+            loaded_file=str(self.filename) if self.filename else None,
+            item_count=len(self.scene.user_items()),
+            dirty=not self.undo_stack.isClean(),
         )
 
     def on_action_insert_images(self) -> None:

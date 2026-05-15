@@ -55,7 +55,7 @@ dev = [
 ]
 
 [project.scripts]
-zeeref-add = "zeeref.session_client:main"
+zeeref-cli = "zeeref.cli:main"
 
 [project.gui-scripts]
 zeeref = "zeeref.__main__:main"
