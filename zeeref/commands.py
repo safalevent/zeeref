@@ -336,3 +336,80 @@ class ChangeOpacity(QtGui.QUndoCommand):
     def undo(self):
         for item, opacity in zip(self.items, self.old_opacities):
             item.setOpacity(opacity)
+
+
+class EditItem(QtGui.QUndoCommand):
+    """Apply a partial dict of field updates to a single item.
+
+    Supports transforms (x, y, z, scale, rotation, flip), opacity,
+    title/caption (pixmap items), and text (text items).  Captures old
+    values for clean undo.  Fields not present in *changes* are not
+    touched.  ``flip`` of ``None`` is treated as 1.
+    """
+
+    _TRANSFORM_KEYS = ("x", "y", "z", "scale", "rotation")
+
+    def __init__(self, item, changes: dict):
+        super().__init__("Edit item")
+        self.item = item
+        self.new = dict(changes)
+        self.old: dict = {}
+        for k in self._TRANSFORM_KEYS:
+            if k in self.new:
+                self.old[k] = self._read(item, k)
+        if "flip" in self.new:
+            self.old["flip"] = item.flip()
+        if "opacity" in self.new:
+            self.old["opacity"] = item.opacity()
+        if "title" in self.new:
+            self.old["title"] = getattr(item, "title", None)
+        if "caption" in self.new:
+            self.old["caption"] = getattr(item, "caption", None)
+        if "text" in self.new:
+            self.old["text"] = getattr(item, "_markdown", None)
+
+    @staticmethod
+    def _read(item, key: str):
+        if key == "x":
+            return item.pos().x()
+        if key == "y":
+            return item.pos().y()
+        if key == "z":
+            return item.zValue()
+        if key == "scale":
+            return item.scale()
+        if key == "rotation":
+            return item.rotation()
+        raise KeyError(key)
+
+    def _apply(self, values: dict) -> None:
+        item = self.item
+        if "x" in values or "y" in values:
+            new_x = values.get("x", item.pos().x())
+            new_y = values.get("y", item.pos().y())
+            item.setPos(new_x, new_y)
+        if "z" in values:
+            item.setZValue(values["z"])
+        if "scale" in values:
+            item.setScale(values["scale"])
+        if "rotation" in values:
+            item.setRotation(values["rotation"])
+        if "flip" in values:
+            target = values["flip"] if values["flip"] is not None else 1
+            if target != item.flip():
+                item.do_flip()
+        if "opacity" in values:
+            item.setOpacity(values["opacity"])
+        if "title" in values:
+            item.title = values["title"] or None
+        if "caption" in values:
+            item.caption = values["caption"] or None
+        if "text" in values:
+            text = values["text"] or ""
+            item.set_markdown(text)
+
+    def redo(self) -> None:
+        self._apply(self.new)
+
+    def undo(self) -> None:
+        self._apply(self.old)

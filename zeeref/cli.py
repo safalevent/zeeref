@@ -462,6 +462,58 @@ def _cmd_view(args: argparse.Namespace) -> None:
         sock.disconnectFromServer()
 
 
+_EDIT_METADATA_FIELDS: tuple[str, ...] = ("title", "caption", "text")
+
+
+def _build_edit_payload(args: argparse.Namespace) -> list[dict]:
+    if args.stdin:
+        try:
+            payload = json.loads(sys.stdin.read())
+        except json.JSONDecodeError as e:
+            sys.exit(f"Error: invalid JSON on stdin: {e}")
+        if not isinstance(payload, list) or not payload:
+            sys.exit("Error: expected non-empty JSON array on stdin")
+        return payload
+
+    if not args.id:
+        sys.exit("Error: edit requires an item id")
+    entry: dict = {"id": args.id}
+    for f in _TRANSFORM_FIELDS:
+        v = getattr(args, f, None)
+        if v is not None:
+            entry[f] = v
+    for f in _EDIT_METADATA_FIELDS:
+        v = getattr(args, f, None)
+        if v is not None:
+            entry[f] = v
+    if len(entry) == 1:
+        sys.exit("Error: edit requires at least one field to change")
+    return [entry]
+
+
+def _cmd_edit(args: argparse.Namespace) -> None:
+    payload = _build_edit_payload(args)
+    sock = _connect_or_die(args.session)
+    try:
+        reply = _request(sock, {"type": "edit", "payload": payload})
+        _exit_on_error_reply(reply)
+        _emit({"ok": True, "session": args.session, "edited": len(payload)})
+    finally:
+        sock.disconnectFromServer()
+
+
+def _cmd_delete(args: argparse.Namespace) -> None:
+    if not args.ids:
+        sys.exit("Error: delete requires at least one id")
+    sock = _connect_or_die(args.session)
+    try:
+        reply = _request(sock, {"type": "delete", "ids": args.ids})
+        _exit_on_error_reply(reply)
+        _emit({"ok": True, "session": args.session, "deleted": len(args.ids)})
+    finally:
+        sock.disconnectFromServer()
+
+
 def _cmd_sessions(args: argparse.Namespace) -> None:
     sessions = _scan_sessions()
     _emit({"ok": True, "sessions": sessions})
@@ -649,6 +701,37 @@ def main() -> None:
     view_p = sub.add_parser("view", help="Viewport state (no spawn)")
     view_p.add_argument("session", help="Session name")
     view_p.set_defaults(func=_cmd_view)
+
+    # edit
+    edit_p = sub.add_parser(
+        "edit", help="Modify item fields by id (no spawn, additive)"
+    )
+    edit_p.add_argument("session", help="Session name")
+    edit_p.add_argument("id", nargs="?", help="Item id (omit with --stdin)")
+    edit_p.add_argument("--x", type=float, default=None, help="Top-left x")
+    edit_p.add_argument("--y", type=float, default=None, help="Top-left y")
+    edit_p.add_argument("--scale", type=float, default=None, help="Scale factor")
+    edit_p.add_argument(
+        "--rotation", type=float, default=None, help="Rotation in degrees"
+    )
+    edit_p.add_argument("--z", type=float, default=None, help="Z stack order")
+    edit_p.add_argument("--flip", type=int, default=None, choices=[-1, 1])
+    edit_p.add_argument("--opacity", type=float, default=None, help="0.0..1.0")
+    edit_p.add_argument("--title", default=None, help="Image title ('' to clear)")
+    edit_p.add_argument("--caption", default=None, help="Image caption ('' to clear)")
+    edit_p.add_argument("--text", default=None, help="Text item markdown ('' to clear)")
+    edit_p.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read JSON array from stdin (each entry: {id, ...fields})",
+    )
+    edit_p.set_defaults(func=_cmd_edit)
+
+    # delete
+    delete_p = sub.add_parser("delete", help="Remove items by id (no spawn)")
+    delete_p.add_argument("session", help="Session name")
+    delete_p.add_argument("ids", nargs="+", help="One or more item ids")
+    delete_p.set_defaults(func=_cmd_delete)
 
     args = parser.parse_args()
     args.func(args)

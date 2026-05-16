@@ -217,6 +217,8 @@ def main():
             get_fn=bee.view.get_session_item,
             view_fn=bee.view.get_session_view,
             insert_text_fn=bee.view.do_insert_text_with_callback,
+            edit_fn=bee.view.do_edit_with_callback,
+            delete_fn=bee.view.do_delete_with_callback,
         )
         if not session_server.start():
             print(

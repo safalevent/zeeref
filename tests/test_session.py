@@ -9,6 +9,8 @@ from PyQt6 import QtNetwork
 from zeeref.session import (
     AddMessage,
     AddTextMessage,
+    DeleteMessage,
+    EditMessage,
     ErrorMessage,
     GetRequestMessage,
     ItemMessage,
@@ -90,6 +92,16 @@ def mock_insert_text_fn():
 
 
 @pytest.fixture
+def mock_edit_fn():
+    return _mock_async_fn()
+
+
+@pytest.fixture
+def mock_delete_fn():
+    return _mock_async_fn()
+
+
+@pytest.fixture
 def server(
     qtbot,
     session_name,
@@ -101,6 +113,8 @@ def server(
     mock_get_fn,
     mock_view_fn,
     mock_insert_text_fn,
+    mock_edit_fn,
+    mock_delete_fn,
 ):
     srv = SessionServer(
         session_name,
@@ -112,6 +126,8 @@ def server(
         mock_get_fn,
         mock_view_fn,
         mock_insert_text_fn,
+        mock_edit_fn,
+        mock_delete_fn,
     )
     assert srv.start()
     yield srv
@@ -257,6 +273,8 @@ def _make_server(session_name, insert_fn):
         MagicMock(return_value=ItemsMessage(items=())),
         MagicMock(return_value=ItemMessage(item=None)),
         MagicMock(return_value=ViewInfoMessage()),
+        _mock_async_fn(),
+        _mock_async_fn(),
         _mock_async_fn(),
     )
 
@@ -481,6 +499,8 @@ def test_new_reports_errors_from_callback(qtbot, session_name):
         MagicMock(return_value=ItemMessage(item=None)),
         MagicMock(return_value=ViewInfoMessage()),
         _mock_async_fn(),
+        _mock_async_fn(),
+        _mock_async_fn(),
     )
     assert srv.start()
     try:
@@ -523,6 +543,8 @@ def test_open_reports_errors_from_callback(qtbot, session_name):
         MagicMock(return_value=ItemMessage(item=None)),
         MagicMock(return_value=ViewInfoMessage()),
         _mock_async_fn(),
+        _mock_async_fn(),
+        _mock_async_fn(),
     )
     assert srv.start()
     try:
@@ -560,6 +582,8 @@ def test_writes_serialize_through_queue(qtbot, session_name, imgfile):
         MagicMock(return_value=ItemsMessage(items=())),
         MagicMock(return_value=ItemMessage(item=None)),
         MagicMock(return_value=ViewInfoMessage()),
+        _mock_async_fn(),
+        _mock_async_fn(),
         _mock_async_fn(),
     )
     assert srv.start()
@@ -690,6 +714,8 @@ def test_reads_bypass_mutation_queue(qtbot, session_name, imgfile):
         MagicMock(return_value=ItemsMessage(items=())),
         MagicMock(return_value=ItemMessage(item=None)),
         MagicMock(return_value=ViewInfoMessage()),
+        _mock_async_fn(),
+        _mock_async_fn(),
         _mock_async_fn(),
     )
     assert srv.start()
@@ -879,6 +905,8 @@ def test_add_text_serializes_with_other_writes(qtbot, session_name, imgfile):
         MagicMock(return_value=ItemMessage(item=None)),
         MagicMock(return_value=ViewInfoMessage()),
         MagicMock(side_effect=slow_text),
+        _mock_async_fn(),
+        _mock_async_fn(),
     )
     assert srv.start()
     try:
@@ -899,5 +927,170 @@ def test_add_text_serializes_with_other_writes(qtbot, session_name, imgfile):
         qtbot.waitUntil(lambda: c1.done and c2.done, timeout=3000)
         assert c1.reply["type"] == "ok"
         assert c2.reply["type"] == "ok"
+    finally:
+        srv.shutdown()
+
+
+# -- parse_message: edit/delete --------------------------------------------
+
+
+def test_parse_edit_basic():
+    result = parse_message(
+        json.dumps(
+            {"type": "edit", "payload": [{"id": "abc", "x": 1.0, "title": "hi"}]}
+        )
+    )
+    assert isinstance(result, EditMessage)
+    edit = result.edits[0]
+    assert edit["id"] == "abc"
+    assert edit["x"] == 1.0
+    assert edit["title"] == "hi"
+
+
+def test_parse_edit_clears_title_on_empty_string():
+    result = parse_message(
+        json.dumps({"type": "edit", "payload": [{"id": "abc", "title": ""}]})
+    )
+    assert isinstance(result, EditMessage)
+    assert result.edits[0]["title"] is None
+
+
+def test_parse_edit_clears_caption_on_null():
+    result = parse_message(
+        json.dumps({"type": "edit", "payload": [{"id": "abc", "caption": None}]})
+    )
+    assert isinstance(result, EditMessage)
+    assert result.edits[0]["caption"] is None
+
+
+def test_parse_edit_clears_text_on_empty_string():
+    result = parse_message(
+        json.dumps({"type": "edit", "payload": [{"id": "abc", "text": ""}]})
+    )
+    assert isinstance(result, EditMessage)
+    assert result.edits[0]["text"] is None
+
+
+def test_parse_edit_requires_id():
+    result = parse_message(json.dumps({"type": "edit", "payload": [{"x": 1.0}]}))
+    assert isinstance(result, ErrorMessage)
+
+
+def test_parse_edit_rejects_invalid_field():
+    result = parse_message(
+        json.dumps({"type": "edit", "payload": [{"id": "abc", "title": 123}]})
+    )
+    assert isinstance(result, ErrorMessage)
+
+
+def test_parse_edit_rejects_invalid_flip():
+    result = parse_message(
+        json.dumps({"type": "edit", "payload": [{"id": "abc", "flip": 2}]})
+    )
+    assert isinstance(result, ErrorMessage)
+
+
+def test_parse_delete_basic():
+    result = parse_message('{"type": "delete", "ids": ["a", "b"]}')
+    assert isinstance(result, DeleteMessage)
+    assert result.ids == ("a", "b")
+
+
+def test_parse_delete_requires_non_empty():
+    result = parse_message('{"type": "delete", "ids": []}')
+    assert isinstance(result, ErrorMessage)
+
+
+def test_parse_delete_rejects_non_string_id():
+    result = parse_message('{"type": "delete", "ids": [123]}')
+    assert isinstance(result, ErrorMessage)
+
+
+# -- Integration: edit/delete dispatch -------------------------------------
+
+
+def test_edit_dispatches_to_edit_fn(qtbot, server, session_name, mock_edit_fn):
+    c = AsyncClient(
+        session_name,
+        make_msg(
+            {
+                "type": "edit",
+                "payload": [{"id": "abc", "x": 5.0, "title": "renamed"}],
+            }
+        ),
+    )
+    qtbot.waitUntil(lambda: c.done, timeout=3000)
+    assert c.reply["type"] == "ok"
+    mock_edit_fn.assert_called_once()
+    edits = mock_edit_fn.call_args[0][0]
+    assert edits[0]["id"] == "abc"
+    assert edits[0]["x"] == 5.0
+    assert edits[0]["title"] == "renamed"
+
+
+def test_edit_reports_unknown_id_error(qtbot, session_name):
+    def edit_with_missing(edits, on_done):
+        on_done(["unknown id: missing"])
+
+    fn = MagicMock(side_effect=edit_with_missing)
+    srv = SessionServer(
+        session_name,
+        _mock_async_fn(),
+        _mock_async_fn(),
+        _mock_async_fn(),
+        MagicMock(return_value=StatusInfoMessage()),
+        MagicMock(return_value=ItemsMessage(items=())),
+        MagicMock(return_value=ItemMessage(item=None)),
+        MagicMock(return_value=ViewInfoMessage()),
+        _mock_async_fn(),
+        fn,
+        _mock_async_fn(),
+    )
+    assert srv.start()
+    try:
+        c = AsyncClient(
+            session_name,
+            make_msg({"type": "edit", "payload": [{"id": "missing", "x": 0.0}]}),
+        )
+        qtbot.waitUntil(lambda: c.done, timeout=3000)
+        assert c.reply["type"] == "error"
+        assert "unknown id" in c.reply["message"]
+    finally:
+        srv.shutdown()
+
+
+def test_delete_dispatches_to_delete_fn(qtbot, server, session_name, mock_delete_fn):
+    c = AsyncClient(session_name, make_msg({"type": "delete", "ids": ["a", "b"]}))
+    qtbot.waitUntil(lambda: c.done, timeout=3000)
+    assert c.reply["type"] == "ok"
+    mock_delete_fn.assert_called_once()
+    ids = mock_delete_fn.call_args[0][0]
+    assert ids == ["a", "b"]
+
+
+def test_delete_reports_unknown_id_error(qtbot, session_name):
+    def delete_with_missing(ids, on_done):
+        on_done(["unknown id: nope"])
+
+    fn = MagicMock(side_effect=delete_with_missing)
+    srv = SessionServer(
+        session_name,
+        _mock_async_fn(),
+        _mock_async_fn(),
+        _mock_async_fn(),
+        MagicMock(return_value=StatusInfoMessage()),
+        MagicMock(return_value=ItemsMessage(items=())),
+        MagicMock(return_value=ItemMessage(item=None)),
+        MagicMock(return_value=ViewInfoMessage()),
+        _mock_async_fn(),
+        _mock_async_fn(),
+        fn,
+    )
+    assert srv.start()
+    try:
+        c = AsyncClient(session_name, make_msg({"type": "delete", "ids": ["nope"]}))
+        qtbot.waitUntil(lambda: c.done, timeout=3000)
+        assert c.reply["type"] == "error"
+        assert "unknown id" in c.reply["message"]
     finally:
         srv.shutdown()

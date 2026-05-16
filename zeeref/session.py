@@ -63,6 +63,13 @@ it before sending::
     Server: {"type": "view_info", "center_x": ..., "center_y": ...,
              "zoom": ..., "window": {x, y, width, height}}
 
+    Client: {"type": "edit", "payload": [{"id": "...", x?, y?, scale?,
+             rotation?, z?, flip?, opacity?, title?, caption?, text?}, ...]}
+    Server: {"type": "ok"} | {"type": "error", "message": "..."}
+
+    Client: {"type": "delete", "ids": ["...", ...]}
+    Server: {"type": "ok"} | {"type": "error", "message": "..."}
+
 Bump ``PROTOCOL_VERSION`` on any wire-incompatible change.
 """
 
@@ -87,7 +94,7 @@ from zeeref.fileio.io import ImageInsert, TextInsert
 logger = logging.getLogger(__name__)
 
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 
 
 # -- Messages --------------------------------------------------------------
@@ -167,6 +174,27 @@ class ViewRequestMessage(ClientMessage):
     """Request viewport state."""
 
     type: str = "view"
+
+
+@dataclasses.dataclass(frozen=True)
+class EditMessage(ClientMessage):
+    """Partial-update one or more items by id.
+
+    Each entry is a dict carrying an ``id`` plus the subset of fields
+    to change.  Falsy strings (``""`` / ``None``) clear ``title``,
+    ``caption``, and ``text``.
+    """
+
+    type: str = "edit"
+    edits: tuple[dict, ...] = ()
+
+
+@dataclasses.dataclass(frozen=True)
+class DeleteMessage(ClientMessage):
+    """Remove one or more items by id."""
+
+    type: str = "delete"
+    ids: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -335,6 +363,54 @@ def _parse_insert_entry(raw: object, index: int) -> ImageInsert | str:
     )
 
 
+def _parse_edit_entry(raw: object, index: int) -> dict | str:
+    """Parse one edit dict, validating optional transform/metadata fields.
+
+    Returns a dict carrying the (possibly empty) subset of fields the
+    caller wants to change, plus the required ``id``.  Falsy strings
+    for title/caption/text are normalized to ``None`` to clear.
+    """
+    if not isinstance(raw, dict):
+        return f"item {index}: expected object, got {type(raw).__name__}"
+    d = cast(dict[str, object], raw)
+    item_id = d.get("id")
+    if not isinstance(item_id, str) or not item_id:
+        return f"item {index}: missing or invalid 'id'"
+
+    changes: dict = {"id": item_id}
+
+    for field in ("x", "y", "scale", "rotation", "z", "opacity"):
+        if field in d:
+            val, err = _coerce_number(d[field], field, index, float)
+            if err:
+                return err
+            changes[field] = None if val is None else float(val)
+
+    if "flip" in d:
+        val, err = _coerce_number(d["flip"], "flip", index, int)
+        if err:
+            return err
+        if val is not None and val not in (-1, 1):
+            return f"item {index}: 'flip' must be 1 or -1"
+        changes["flip"] = None if val is None else int(val)
+
+    if "opacity" in changes:
+        op = changes["opacity"]
+        if op is not None and not (0.0 <= op <= 1.0):
+            return f"item {index}: 'opacity' must be in [0.0, 1.0]"
+
+    for field in ("title", "caption", "text"):
+        if field in d:
+            val = d[field]
+            if val is None or isinstance(val, str):
+                # Falsy strings clear; truthy strings set.
+                changes[field] = val if val else None
+            else:
+                return f"item {index}: '{field}' must be a string or null"
+
+    return changes
+
+
 def _parse_text_entry(raw: object, index: int) -> TextInsert | str:
     """Parse a single JSON object into a TextInsert."""
     if not isinstance(raw, dict):
@@ -472,6 +548,29 @@ def parse_message(line: str) -> ClientMessage | ErrorMessage:
             texts.append(parsed)
         return AddTextMessage(texts=tuple(texts))
 
+    if msg_type == "edit":
+        payload = msg.get("payload")
+        if not isinstance(payload, list) or not payload:
+            return ErrorMessage(message="'edit' requires non-empty 'payload' array")
+        edits: list[dict] = []
+        for i, entry in enumerate(payload):
+            parsed = _parse_edit_entry(entry, i)
+            if isinstance(parsed, str):
+                return ErrorMessage(message=parsed)
+            edits.append(parsed)
+        return EditMessage(edits=tuple(edits))
+
+    if msg_type == "delete":
+        ids = msg.get("ids")
+        if not isinstance(ids, list) or not ids:
+            return ErrorMessage(message="'delete' requires non-empty 'ids' array")
+        out_ids: list[str] = []
+        for i, v in enumerate(ids):
+            if not isinstance(v, str) or not v:
+                return ErrorMessage(message=f"ids[{i}]: must be non-empty string")
+            out_ids.append(v)
+        return DeleteMessage(ids=tuple(out_ids))
+
     return ErrorMessage(message=f"unknown type: {msg_type}")
 
 
@@ -497,6 +596,8 @@ class SessionServer(QtCore.QObject):
         get_fn: Callable[[str], ItemMessage],
         view_fn: Callable[[], ViewInfoMessage],
         insert_text_fn: Callable[[list[TextInsert], Callable[[list[str]], None]], None],
+        edit_fn: Callable[[list[dict], Callable[[list[str]], None]], None],
+        delete_fn: Callable[[list[str], Callable[[list[str]], None]], None],
         parent: QtCore.QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -509,6 +610,8 @@ class SessionServer(QtCore.QObject):
         self._get_fn = get_fn
         self._view_fn = view_fn
         self._insert_text_fn = insert_text_fn
+        self._edit_fn = edit_fn
+        self._delete_fn = delete_fn
         self._server = QtNetwork.QLocalServer(self)
         self._server.newConnection.connect(self._on_new_connection)
         self._connections: list[_SessionConnection] = []
@@ -569,7 +672,17 @@ class SessionServer(QtCore.QObject):
         if isinstance(msg, ViewRequestMessage):
             conn.reply(self._view_fn())
             return
-        if isinstance(msg, (AddMessage, AddTextMessage, NewMessage, OpenMessage)):
+        if isinstance(
+            msg,
+            (
+                AddMessage,
+                AddTextMessage,
+                NewMessage,
+                OpenMessage,
+                EditMessage,
+                DeleteMessage,
+            ),
+        ):
             self._queue.append((msg, conn))
             self._process_queue()
             return
@@ -593,6 +706,12 @@ class SessionServer(QtCore.QObject):
         elif isinstance(msg, OpenMessage):
             logger.info("Session: opening %s (force=%s)", msg.path, msg.force)
             self._open_fn(Path(msg.path), msg.force, self._on_op_finished)
+        elif isinstance(msg, EditMessage):
+            logger.info("Session: editing %d item(s)", len(msg.edits))
+            self._edit_fn(list(msg.edits), self._on_op_finished)
+        elif isinstance(msg, DeleteMessage):
+            logger.info("Session: deleting %d item(s)", len(msg.ids))
+            self._delete_fn(list(msg.ids), self._on_op_finished)
         else:
             # Defensive — should be unreachable.
             self._busy = False

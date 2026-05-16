@@ -855,6 +855,51 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
                 it.setSelected(True)
         on_done([])
 
+    def do_edit_with_callback(
+        self,
+        edits: list[dict],
+        on_done: Callable[[list[str]], None],
+    ) -> None:
+        """Apply partial edits to items by id. Errors if any id is unknown."""
+        by_id = {it.save_id: it for it in self.scene.user_items()}
+        resolved: list[tuple[Any, dict]] = []
+        for entry in edits:
+            item_id = entry["id"]
+            item = by_id.get(item_id)
+            if item is None:
+                on_done([f"unknown id: {item_id}"])
+                return
+            changes = {k: v for k, v in entry.items() if k != "id"}
+            if changes:
+                resolved.append((item, changes))
+        if not resolved:
+            on_done([])
+            return
+        self.undo_stack.beginMacro(f"Edit {len(resolved)} item(s)")
+        try:
+            for item, changes in resolved:
+                self.undo_stack.push(commands.EditItem(item, changes))
+        finally:
+            self.undo_stack.endMacro()
+        on_done([])
+
+    def do_delete_with_callback(
+        self,
+        ids: list[str],
+        on_done: Callable[[list[str]], None],
+    ) -> None:
+        """Delete items by id via the standard DeleteItems undo command."""
+        by_id = {it.save_id: it for it in self.scene.user_items()}
+        items = []
+        for item_id in ids:
+            item = by_id.get(item_id)
+            if item is None:
+                on_done([f"unknown id: {item_id}"])
+                return
+            items.append(item)
+        self.undo_stack.push(commands.DeleteItems(self.scene, items))
+        on_done([])
+
     def do_new_scene_with_callback(
         self,
         force: bool,
