@@ -6,7 +6,7 @@ from PyQt6 import QtCore, QtGui
 
 from zeeref import fileio
 from zeeref.fileio.scratch import create_scratch_file
-from zeeref.types.snapshot import IOResult, PixmapItemSnapshot
+from zeeref.types.snapshot import PixmapItemSnapshot
 from zeeref.items import ZeePixmapItem
 from ..utils import queue2list
 
@@ -35,13 +35,22 @@ def test_load_zref(read_mock):
         read_mock.assert_called_once()
 
 
+def _assert_finished_result(worker, *, errors, created_count):
+    """Check the emitted IOResult's filename/errors and created_ids length."""
+    worker.finished.emit.assert_called_once()
+    result = worker.finished.emit.call_args[0][0]
+    assert result.filename is None
+    assert result.errors == errors
+    assert len(result.created_ids) == created_count
+
+
 def test_load_images_loads(scene, imgfilename3x3):
     scene._scratch_file = create_scratch_file(None)
     worker = MagicMock(canceled=False)
     fileio.insert_image_files([imgfilename3x3], QtCore.QPointF(5, 6), scene, worker)
     worker.begin_processing.emit.assert_called_once_with(1)
     worker.progress.emit.assert_called_once_with(0)
-    worker.finished.emit.assert_called_once_with(IOResult(filename=None, errors=[]))
+    _assert_finished_result(worker, errors=[], created_count=1)
     itemdata = queue2list(scene.items_to_add)
     assert len(itemdata) == 1
     snap, selected = itemdata[0]
@@ -59,7 +68,7 @@ def test_load_images_canceled(scene, imgfilename3x3):
     )
     worker.begin_processing.emit.assert_called_once_with(2)
     worker.progress.emit.assert_called_once_with(0)
-    worker.finished.emit.assert_called_once_with(IOResult(filename=None, errors=[]))
+    _assert_finished_result(worker, errors=[], created_count=1)
     itemdata = queue2list(scene.items_to_add)
     assert len(itemdata) == 1
     snap, selected = itemdata[0]
@@ -78,9 +87,7 @@ def test_load_images_error(scene, imgfilename3x3):
     worker.begin_processing.emit.assert_called_once_with(2)
     worker.progress.emit.assert_any_call(0)
     worker.progress.emit.assert_any_call(1)
-    worker.finished.emit.assert_called_once_with(
-        IOResult(filename=None, errors=["foo.jpg"])
-    )
+    _assert_finished_result(worker, errors=["foo.jpg"], created_count=1)
     itemdata = queue2list(scene.items_to_add)
     assert len(itemdata) == 1
     snap, selected = itemdata[0]

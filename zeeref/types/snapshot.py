@@ -60,6 +60,7 @@ class IOResult:
 
     filename: Path | None
     errors: list[str] = field(default_factory=list)
+    created_ids: list[str] = field(default_factory=list)
 
 
 @dataclass

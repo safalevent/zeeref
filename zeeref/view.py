@@ -788,9 +788,9 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
     def do_insert_images_with_callback(
         self,
         inserts: list[fileio.ImageInsert],
-        on_done: Callable[[list[str]], None],
+        on_done: Callable[[list[str], list[str]], None],
     ) -> None:
-        """Insert images and call *on_done* with error list when finished.
+        """Insert images and call *on_done* with errors + created ids.
 
         Used by the session IPC server to get notified on completion.
         """
@@ -800,7 +800,7 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
 
         def _wrapped(result: fileio.IOResult) -> None:
             original_finished(result)
-            on_done(result.errors or [])
+            on_done(result.errors or [], list(result.created_ids))
 
         pos = self.get_view_center()
         self.scene.deselect_all_items()
@@ -817,7 +817,7 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
     def do_insert_text_with_callback(
         self,
         inserts: list[fileio.TextInsert],
-        on_done: Callable[[list[str]], None],
+        on_done: Callable[[list[str], list[str]], None],
     ) -> None:
         """Insert markdown text items synchronously and call *on_done*.
 
@@ -853,12 +853,12 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
             self.undo_stack.push(commands.InsertItems(self.scene, items))
             for it in items:
                 it.setSelected(True)
-        on_done([])
+        on_done([], [it.save_id for it in items])
 
     def do_edit_with_callback(
         self,
         edits: list[dict],
-        on_done: Callable[[list[str]], None],
+        on_done: Callable[[list[str], list[str]], None],
     ) -> None:
         """Apply partial edits to items by id. Errors if any id is unknown."""
         by_id = {it.save_id: it for it in self.scene.user_items()}
@@ -867,13 +867,13 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
             item_id = entry["id"]
             item = by_id.get(item_id)
             if item is None:
-                on_done([f"unknown id: {item_id}"])
+                on_done([f"unknown id: {item_id}"], [])
                 return
             changes = {k: v for k, v in entry.items() if k != "id"}
             if changes:
                 resolved.append((item, changes))
         if not resolved:
-            on_done([])
+            on_done([], [])
             return
         self.undo_stack.beginMacro(f"Edit {len(resolved)} item(s)")
         try:
@@ -881,12 +881,12 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
                 self.undo_stack.push(commands.EditItem(item, changes))
         finally:
             self.undo_stack.endMacro()
-        on_done([])
+        on_done([], [])
 
     def do_delete_with_callback(
         self,
         ids: list[str],
-        on_done: Callable[[list[str]], None],
+        on_done: Callable[[list[str], list[str]], None],
     ) -> None:
         """Delete items by id via the standard DeleteItems undo command."""
         by_id = {it.save_id: it for it in self.scene.user_items()}
@@ -894,47 +894,47 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
         for item_id in ids:
             item = by_id.get(item_id)
             if item is None:
-                on_done([f"unknown id: {item_id}"])
+                on_done([f"unknown id: {item_id}"], [])
                 return
             items.append(item)
         self.undo_stack.push(commands.DeleteItems(self.scene, items))
-        on_done([])
+        on_done([], [])
 
     def do_new_scene_with_callback(
         self,
         force: bool,
-        on_done: Callable[[list[str]], None],
+        on_done: Callable[[list[str], list[str]], None],
     ) -> None:
         """Reset scene to empty. Errors if dirty and not *force*.
 
         Used by the session IPC server.
         """
         if not force and not self.undo_stack.isClean():
-            on_done(["session has unsaved changes; pass force=true to discard"])
+            on_done(["session has unsaved changes; pass force=true to discard"], [])
             return
         self.clear_scene()
         self.update_window_title()
-        on_done([])
+        on_done([], [])
 
     def do_open_with_callback(
         self,
         filename: Path,
         force: bool,
-        on_done: Callable[[list[str]], None],
+        on_done: Callable[[list[str], list[str]], None],
     ) -> None:
         """Open *filename* into the running session. Errors if dirty
         and not *force*, or if the file is missing.
         """
         if not force and not self.undo_stack.isClean():
-            on_done(["session has unsaved changes; pass force=true to discard"])
+            on_done(["session has unsaved changes; pass force=true to discard"], [])
             return
         if not filename.is_file():
-            on_done([f"file not found: {filename}"])
+            on_done([f"file not found: {filename}"], [])
             return
 
         def _wrapped(result: fileio.IOResult) -> None:
             self.on_loading_finished(result)
-            on_done(list(result.errors) if result.errors else [])
+            on_done(list(result.errors) if result.errors else [], [])
 
         self.clear_scene()
         self.run_async(

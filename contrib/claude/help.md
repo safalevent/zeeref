@@ -60,6 +60,13 @@ zeeref-cli delete SESSION ID [ID...]
 }
 ```
 
+## Reply shapes
+
+- `add` / `add-text` echo `ids` (list of newly-created item ids) — feed them straight into `edit`/`delete`.
+- `edit` echoes `items` (the post-edit snapshots) — confirm the change or read side effects without a follow-up `get`.
+- `open` echoes `status` (loaded_file, item_count, dirty) — no follow-up `status` call needed.
+- `ping` echoes `protocol_version` and `app_version` from the server's hello.
+
 ## Notes
 
 - `x, y` are the item's **top-left in scene coords**, matching the `.zref` `items` schema. Scale and rotation grow from local (0, 0); for centered placement, omit `x/y` (zeeref centers at the view) or compute the offset yourself.
@@ -69,6 +76,10 @@ zeeref-cli delete SESSION ID [ID...]
 ## Patterns
 
 ```bash
+# Add and immediately edit — no separate list call needed
+id=$(zeeref-cli add scratch /tmp/img.png | jq -r '.ids[0]')
+zeeref-cli edit scratch "$id" --title "tagged" --x 200 --y 100
+
 # Find an image by filename and move it
 id=$(zeeref-cli list scratch \
      | jq -r '.items[] | select(.data.filename | test("a.png$")) | .id')

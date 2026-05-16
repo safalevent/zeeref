@@ -179,14 +179,14 @@ def _cleanup_spawn_log(log_path: Path | None) -> None:
         pass
 
 
-def _connect_or_die(session: str) -> QtNetwork.QLocalSocket:
-    """Connect to *session* or sys.exit. Reads hello. No spawning."""
+def _connect_or_die(session: str) -> tuple[QtNetwork.QLocalSocket, dict]:
+    """Connect to *session* or sys.exit. Returns (sock, hello). No spawning."""
     sock = _try_connect(session)
     if sock is None:
         sys.exit(f"Error: session '{session}' is not running")
     assert sock is not None
-    _read_hello(sock)
-    return sock
+    hello = _read_hello(sock)
+    return sock, hello
 
 
 def _connect_or_spawn(
@@ -222,6 +222,11 @@ def _emit(obj: dict) -> None:
 def _exit_on_error_reply(reply: dict) -> None:
     if reply.get("type") == "error":
         sys.exit(f"Error: {reply.get('message', 'unknown')}")
+
+
+def _strip_type(d: dict) -> dict:
+    """Drop the wire-envelope ``type`` field for cleaner user-facing output."""
+    return {k: v for k, v in d.items() if k != "type"}
 
 
 # -- payload helpers --------------------------------------------------------
@@ -291,7 +296,14 @@ def _cmd_add(args: argparse.Namespace) -> None:
     try:
         reply = _request(sock, {"type": "add", "payload": payload})
         _exit_on_error_reply(reply)
-        _emit({"ok": True, "session": args.session, "added": len(payload)})
+        _emit(
+            {
+                "ok": True,
+                "session": args.session,
+                "added": len(payload),
+                "ids": list(reply.get("ids") or []),
+            }
+        )
     finally:
         sock.disconnectFromServer()
         _cleanup_spawn_log(spawn_log)
@@ -321,7 +333,14 @@ def _cmd_add_text(args: argparse.Namespace) -> None:
     try:
         reply = _request(sock, {"type": "add_text", "payload": payload})
         _exit_on_error_reply(reply)
-        _emit({"ok": True, "session": args.session, "added": len(payload)})
+        _emit(
+            {
+                "ok": True,
+                "session": args.session,
+                "added": len(payload),
+                "ids": list(reply.get("ids") or []),
+            }
+        )
     finally:
         sock.disconnectFromServer()
         _cleanup_spawn_log(spawn_log)
@@ -371,12 +390,16 @@ def _cmd_open(args: argparse.Namespace) -> None:
         sock, spawn_log = _spawn_and_connect(args.session, [str(path)])
         try:
             _read_hello(sock)
+            # After spawn-with-file, ask the fresh session for its status
+            # so the reply matches the IPC-load branch.
+            status_reply = _request(sock, {"type": "status"})
             _emit(
                 {
                     "ok": True,
                     "session": args.session,
                     "path": str(path),
                     "spawned": True,
+                    "status": _strip_type(status_reply),
                 }
             )
         finally:
@@ -397,6 +420,7 @@ def _cmd_open(args: argparse.Namespace) -> None:
                 "session": args.session,
                 "path": str(path),
                 "spawned": False,
+                "status": reply.get("status"),
             }
         )
     finally:
@@ -404,27 +428,34 @@ def _cmd_open(args: argparse.Namespace) -> None:
 
 
 def _cmd_ping(args: argparse.Namespace) -> None:
-    sock = _connect_or_die(args.session)
+    sock, hello = _connect_or_die(args.session)
     try:
         reply = _request(sock, {"type": "ping"})
         _exit_on_error_reply(reply)
-        _emit({"ok": True, "session": args.session, "reply": reply})
+        _emit(
+            {
+                "ok": True,
+                "session": args.session,
+                "protocol_version": hello.get("protocol_version"),
+                "app_version": hello.get("app_version"),
+            }
+        )
     finally:
         sock.disconnectFromServer()
 
 
 def _cmd_status(args: argparse.Namespace) -> None:
-    sock = _connect_or_die(args.session)
+    sock, hello = _connect_or_die(args.session)
     try:
         reply = _request(sock, {"type": "status"})
         _exit_on_error_reply(reply)
-        _emit({"ok": True, "session": args.session, "status": reply})
+        _emit({"ok": True, "session": args.session, "status": _strip_type(reply)})
     finally:
         sock.disconnectFromServer()
 
 
 def _cmd_list(args: argparse.Namespace) -> None:
-    sock = _connect_or_die(args.session)
+    sock, hello = _connect_or_die(args.session)
     try:
         reply = _request(sock, {"type": "list"})
         _exit_on_error_reply(reply)
@@ -440,7 +471,7 @@ def _cmd_list(args: argparse.Namespace) -> None:
 
 
 def _cmd_get(args: argparse.Namespace) -> None:
-    sock = _connect_or_die(args.session)
+    sock, hello = _connect_or_die(args.session)
     try:
         reply = _request(sock, {"type": "get", "id": args.id})
         _exit_on_error_reply(reply)
@@ -453,11 +484,11 @@ def _cmd_get(args: argparse.Namespace) -> None:
 
 
 def _cmd_view(args: argparse.Namespace) -> None:
-    sock = _connect_or_die(args.session)
+    sock, hello = _connect_or_die(args.session)
     try:
         reply = _request(sock, {"type": "view"})
         _exit_on_error_reply(reply)
-        _emit({"ok": True, "session": args.session, "view": reply})
+        _emit({"ok": True, "session": args.session, "view": _strip_type(reply)})
     finally:
         sock.disconnectFromServer()
 
@@ -493,11 +524,18 @@ def _build_edit_payload(args: argparse.Namespace) -> list[dict]:
 
 def _cmd_edit(args: argparse.Namespace) -> None:
     payload = _build_edit_payload(args)
-    sock = _connect_or_die(args.session)
+    sock, hello = _connect_or_die(args.session)
     try:
         reply = _request(sock, {"type": "edit", "payload": payload})
         _exit_on_error_reply(reply)
-        _emit({"ok": True, "session": args.session, "edited": len(payload)})
+        _emit(
+            {
+                "ok": True,
+                "session": args.session,
+                "edited": len(payload),
+                "items": list(reply.get("items") or []),
+            }
+        )
     finally:
         sock.disconnectFromServer()
 
@@ -505,7 +543,7 @@ def _cmd_edit(args: argparse.Namespace) -> None:
 def _cmd_delete(args: argparse.Namespace) -> None:
     if not args.ids:
         sys.exit("Error: delete requires at least one id")
-    sock = _connect_or_die(args.session)
+    sock, hello = _connect_or_die(args.session)
     try:
         reply = _request(sock, {"type": "delete", "ids": args.ids})
         _exit_on_error_reply(reply)
@@ -549,7 +587,7 @@ def _scan_sessions() -> list[dict]:
         try:
             reply = _request(sock, {"type": "status"})
             if reply.get("type") == "status_info":
-                out.append({"name": name, "status": reply})
+                out.append({"name": name, "status": _strip_type(reply)})
         finally:
             sock.disconnectFromServer()
     return out

@@ -94,7 +94,7 @@ from zeeref.fileio.io import ImageInsert, TextInsert
 logger = logging.getLogger(__name__)
 
 
-PROTOCOL_VERSION = 4
+PROTOCOL_VERSION = 5
 
 
 # -- Messages --------------------------------------------------------------
@@ -209,7 +209,19 @@ class ServerMessage:
 
 @dataclasses.dataclass(frozen=True)
 class OkMessage(ServerMessage):
+    """Generic success reply.
+
+    Fields are populated for the operations where they're meaningful:
+      * ``ids``: created snapshot ids (add / add_text)
+      * ``items``: post-mutation snapshot dicts (edit)
+      * ``status``: status_info dict (open)
+    Empty for ops that don't have anything to return.
+    """
+
     type: str = "ok"
+    ids: tuple[str, ...] = ()
+    items: tuple[dict, ...] = ()
+    status: dict | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -588,16 +600,20 @@ class SessionServer(QtCore.QObject):
     def __init__(
         self,
         session_name: str,
-        insert_fn: Callable[[list[ImageInsert], Callable[[list[str]], None]], None],
-        new_fn: Callable[[bool, Callable[[list[str]], None]], None],
-        open_fn: Callable[[Path, bool, Callable[[list[str]], None]], None],
+        insert_fn: Callable[
+            [list[ImageInsert], Callable[[list[str], list[str]], None]], None
+        ],
+        new_fn: Callable[[bool, Callable[[list[str], list[str]], None]], None],
+        open_fn: Callable[[Path, bool, Callable[[list[str], list[str]], None]], None],
         status_fn: Callable[[], StatusInfoMessage],
         list_fn: Callable[[], ItemsMessage],
         get_fn: Callable[[str], ItemMessage],
         view_fn: Callable[[], ViewInfoMessage],
-        insert_text_fn: Callable[[list[TextInsert], Callable[[list[str]], None]], None],
-        edit_fn: Callable[[list[dict], Callable[[list[str]], None]], None],
-        delete_fn: Callable[[list[str], Callable[[list[str]], None]], None],
+        insert_text_fn: Callable[
+            [list[TextInsert], Callable[[list[str], list[str]], None]], None
+        ],
+        edit_fn: Callable[[list[dict], Callable[[list[str], list[str]], None]], None],
+        delete_fn: Callable[[list[str], Callable[[list[str], list[str]], None]], None],
         parent: QtCore.QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -719,13 +735,26 @@ class SessionServer(QtCore.QObject):
             conn.reply(ErrorMessage(message=f"unqueueable message: {msg.type}"))
             self._process_queue()
 
-    def _on_op_finished(self, errors: list[str]) -> None:
+    def _on_op_finished(self, errors: list[str], ids: list[str]) -> None:
         self._busy = False
         msg, conn = self._queue.popleft()
         if errors:
             conn.reply(ErrorMessage(message="; ".join(errors)))
-        else:
-            conn.reply(OkMessage())
+            self._process_queue()
+            return
+
+        # Enrich the ok reply for ops with meaningful return data.
+        items: tuple[dict, ...] = ()
+        status: dict | None = None
+        if isinstance(msg, EditMessage):
+            fetched = [self._get_fn(entry["id"]).item for entry in msg.edits]
+            items = tuple(it for it in fetched if it is not None)
+        elif isinstance(msg, OpenMessage):
+            status_msg = self._status_fn()
+            status = {
+                k: v for k, v in dataclasses.asdict(status_msg).items() if k != "type"
+            }
+        conn.reply(OkMessage(ids=tuple(ids), items=items, status=status))
         self._process_queue()
 
     def _remove_connection(self, conn: _SessionConnection) -> None:

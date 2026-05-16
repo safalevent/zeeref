@@ -336,6 +336,7 @@ def insert_image_files(
     from zeeref.fileio.image import load_pil_from_source
 
     errors = []
+    created_ids: list[str] = []
     worker.begin_processing.emit(len(filenames))
     assert scene._scratch_file is not None
     io = SQLiteIO(scene._scratch_file)
@@ -364,7 +365,7 @@ def insert_image_files(
             errors.append(filename)
             continue
 
-        _insert_image(
+        snap = _insert_image(
             pil_img,
             filename,
             pos,
@@ -374,12 +375,15 @@ def insert_image_files(
             caption=caption,
             transforms=transforms,
         )
+        created_ids.append(snap.save_id)
         if worker.canceled:
             break
         worker.msleep(10)
 
     io._close_connection()
-    worker.finished.emit(IOResult(filename=None, errors=errors))
+    worker.finished.emit(
+        IOResult(filename=None, errors=errors, created_ids=created_ids)
+    )
 
 
 def insert_image_from_clipboard(

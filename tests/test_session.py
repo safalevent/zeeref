@@ -37,12 +37,12 @@ def session_name(tmp_path):
 
 
 def _mock_async_fn():
-    """Mock that invokes its trailing callback with [] immediately."""
+    """Mock that invokes its trailing callback with (errors=[], ids=[])."""
     fn = MagicMock()
 
     def side_effect(*args):
         on_done = args[-1]
-        on_done([])
+        on_done([], [])
 
     fn.side_effect = side_effect
     return fn
@@ -361,7 +361,7 @@ def test_add_reports_insert_errors(qtbot, session_name, imgfile):
     """When the insert callback reports errors, the reply is error."""
 
     def insert_with_errors(inserts, on_done):
-        on_done(["bad_file.png"])
+        on_done(["bad_file.png"], [])
 
     fn = MagicMock(side_effect=insert_with_errors)
     srv = _make_server(session_name, fn)
@@ -393,13 +393,13 @@ def test_blocking_queues_requests(qtbot, session_name, imgfile):
     qtbot.waitUntil(lambda: len(srv._queue) >= 1, timeout=3000)
     assert fn.call_count == 1
 
-    finish_callbacks[0]([])
+    finish_callbacks[0]([], [])
     qtbot.waitUntil(lambda: fn.call_count == 2, timeout=3000)
 
     qtbot.waitUntil(lambda: c1.done, timeout=3000)
     assert c1.reply["type"] == "ok"
 
-    finish_callbacks[1]([])
+    finish_callbacks[1]([], [])
     qtbot.waitUntil(lambda: c2.done, timeout=3000)
     assert c2.reply["type"] == "ok"
 
@@ -487,7 +487,7 @@ def test_new_reports_errors_from_callback(qtbot, session_name):
     """When new_fn reports errors (e.g., dirty), reply is error."""
     new_fn = MagicMock()
     new_fn.side_effect = lambda force, on_done: on_done(
-        ["session has unsaved changes; pass force=true to discard"]
+        ["session has unsaved changes; pass force=true to discard"], []
     )
     srv = SessionServer(
         session_name,
@@ -531,7 +531,7 @@ def test_open_reports_errors_from_callback(qtbot, session_name):
     """When open_fn reports errors, reply is error."""
     open_fn = MagicMock()
     open_fn.side_effect = lambda path, force, on_done: on_done(
-        ["file not found: /missing/x.zref"]
+        ["file not found: /missing/x.zref"], []
     )
     srv = SessionServer(
         session_name,
@@ -602,11 +602,11 @@ def test_writes_serialize_through_queue(qtbot, session_name, imgfile):
         assert len(open_callbacks) == 0
 
         # Drain in order.
-        add_callbacks[0]([])
+        add_callbacks[0]([], [])
         qtbot.waitUntil(lambda: len(new_callbacks) == 1, timeout=3000)
-        new_callbacks[0]([])
+        new_callbacks[0]([], [])
         qtbot.waitUntil(lambda: len(open_callbacks) == 1, timeout=3000)
-        open_callbacks[0]([])
+        open_callbacks[0]([], [])
 
         qtbot.waitUntil(lambda: c1.done and c2.done and c3.done, timeout=3000)
         assert c1.reply["type"] == "ok"
@@ -729,7 +729,7 @@ def test_reads_bypass_mutation_queue(qtbot, session_name, imgfile):
         assert c_list.reply["type"] == "items"
 
         # Drain the add.
-        add_callbacks[0]([])
+        add_callbacks[0]([], [])
         qtbot.waitUntil(lambda: c_add.done, timeout=3000)
         assert c_add.reply["type"] == "ok"
     finally:
@@ -920,9 +920,9 @@ def test_add_text_serializes_with_other_writes(qtbot, session_name, imgfile):
         qtbot.waitUntil(lambda: len(srv._queue) >= 1, timeout=3000)
         assert len(text_callbacks) == 0
 
-        add_callbacks[0]([])
+        add_callbacks[0]([], [])
         qtbot.waitUntil(lambda: len(text_callbacks) == 1, timeout=3000)
-        text_callbacks[0]([])
+        text_callbacks[0]([], [])
 
         qtbot.waitUntil(lambda: c1.done and c2.done, timeout=3000)
         assert c1.reply["type"] == "ok"
@@ -1030,7 +1030,7 @@ def test_edit_dispatches_to_edit_fn(qtbot, server, session_name, mock_edit_fn):
 
 def test_edit_reports_unknown_id_error(qtbot, session_name):
     def edit_with_missing(edits, on_done):
-        on_done(["unknown id: missing"])
+        on_done(["unknown id: missing"], [])
 
     fn = MagicMock(side_effect=edit_with_missing)
     srv = SessionServer(
@@ -1070,7 +1070,7 @@ def test_delete_dispatches_to_delete_fn(qtbot, server, session_name, mock_delete
 
 def test_delete_reports_unknown_id_error(qtbot, session_name):
     def delete_with_missing(ids, on_done):
-        on_done(["unknown id: nope"])
+        on_done(["unknown id: nope"], [])
 
     fn = MagicMock(side_effect=delete_with_missing)
     srv = SessionServer(
@@ -1094,3 +1094,167 @@ def test_delete_reports_unknown_id_error(qtbot, session_name):
         assert "unknown id" in c.reply["message"]
     finally:
         srv.shutdown()
+
+
+# -- Integration: ok reply carries created ids -----------------------------
+
+
+def test_add_reply_includes_created_ids(qtbot, session_name, imgfile):
+    """insert_fn passes ids via its callback; server echoes them in the ok reply."""
+
+    def insert_with_ids(inserts, on_done):
+        on_done([], ["id-aaaa", "id-bbbb"])
+
+    fn = MagicMock(side_effect=insert_with_ids)
+    srv = SessionServer(
+        session_name,
+        fn,
+        _mock_async_fn(),
+        _mock_async_fn(),
+        MagicMock(return_value=StatusInfoMessage()),
+        MagicMock(return_value=ItemsMessage(items=())),
+        MagicMock(return_value=ItemMessage(item=None)),
+        MagicMock(return_value=ViewInfoMessage()),
+        _mock_async_fn(),
+        _mock_async_fn(),
+        _mock_async_fn(),
+    )
+    assert srv.start()
+    try:
+        c = AsyncClient(session_name, add_msg([{"path": str(imgfile)}]))
+        qtbot.waitUntil(lambda: c.done, timeout=3000)
+        assert c.reply["type"] == "ok"
+        assert c.reply["ids"] == ["id-aaaa", "id-bbbb"]
+    finally:
+        srv.shutdown()
+
+
+def test_add_text_reply_includes_created_ids(qtbot, session_name):
+    def text_with_ids(inserts, on_done):
+        on_done([], ["text-id-1"])
+
+    fn = MagicMock(side_effect=text_with_ids)
+    srv = SessionServer(
+        session_name,
+        _mock_async_fn(),
+        _mock_async_fn(),
+        _mock_async_fn(),
+        MagicMock(return_value=StatusInfoMessage()),
+        MagicMock(return_value=ItemsMessage(items=())),
+        MagicMock(return_value=ItemMessage(item=None)),
+        MagicMock(return_value=ViewInfoMessage()),
+        fn,
+        _mock_async_fn(),
+        _mock_async_fn(),
+    )
+    assert srv.start()
+    try:
+        c = AsyncClient(
+            session_name,
+            make_msg({"type": "add_text", "payload": [{"text": "hi"}]}),
+        )
+        qtbot.waitUntil(lambda: c.done, timeout=3000)
+        assert c.reply["type"] == "ok"
+        assert c.reply["ids"] == ["text-id-1"]
+    finally:
+        srv.shutdown()
+
+
+def test_edit_ok_reply_has_empty_ids(qtbot, server, session_name):
+    """Non-creating ops still emit ids in the ok reply, but as an empty list."""
+    c = AsyncClient(
+        session_name,
+        make_msg({"type": "edit", "payload": [{"id": "abc", "x": 1.0}]}),
+    )
+    qtbot.waitUntil(lambda: c.done, timeout=3000)
+    assert c.reply["type"] == "ok"
+    assert c.reply["ids"] == []
+
+
+# -- Server-side ok-reply enrichment ---------------------------------------
+
+
+def test_edit_reply_includes_post_edit_items(qtbot, session_name):
+    """Server fetches the edited item snapshots and includes them in ok reply."""
+    fake_item = {
+        "id": "abc",
+        "type": "pixmap",
+        "x": 5.0,
+        "y": 6.0,
+        "data": {"title": "new"},
+    }
+    edit_fn = _mock_async_fn()
+    get_fn = MagicMock(return_value=ItemMessage(item=fake_item))
+    srv = SessionServer(
+        session_name,
+        _mock_async_fn(),
+        _mock_async_fn(),
+        _mock_async_fn(),
+        MagicMock(return_value=StatusInfoMessage()),
+        MagicMock(return_value=ItemsMessage(items=())),
+        get_fn,
+        MagicMock(return_value=ViewInfoMessage()),
+        _mock_async_fn(),
+        edit_fn,
+        _mock_async_fn(),
+    )
+    assert srv.start()
+    try:
+        c = AsyncClient(
+            session_name,
+            make_msg({"type": "edit", "payload": [{"id": "abc", "x": 5.0}]}),
+        )
+        qtbot.waitUntil(lambda: c.done, timeout=3000)
+        assert c.reply["type"] == "ok"
+        assert c.reply["items"] == [fake_item]
+        get_fn.assert_called_once_with("abc")
+    finally:
+        srv.shutdown()
+
+
+def test_open_reply_includes_status(qtbot, session_name, tmp_path):
+    """Server calls status_fn after open and includes the snapshot in the reply."""
+    target = tmp_path / "x.zref"
+    target.write_bytes(b"stub")
+    status_fn = MagicMock(
+        return_value=StatusInfoMessage(
+            loaded_file=str(target), item_count=42, dirty=False
+        )
+    )
+    srv = SessionServer(
+        session_name,
+        _mock_async_fn(),
+        _mock_async_fn(),
+        _mock_async_fn(),
+        status_fn,
+        MagicMock(return_value=ItemsMessage(items=())),
+        MagicMock(return_value=ItemMessage(item=None)),
+        MagicMock(return_value=ViewInfoMessage()),
+        _mock_async_fn(),
+        _mock_async_fn(),
+        _mock_async_fn(),
+    )
+    assert srv.start()
+    try:
+        c = AsyncClient(
+            session_name,
+            make_msg({"type": "open", "path": str(target), "force": True}),
+        )
+        qtbot.waitUntil(lambda: c.done, timeout=3000)
+        assert c.reply["type"] == "ok"
+        assert c.reply["status"]["loaded_file"] == str(target)
+        assert c.reply["status"]["item_count"] == 42
+        # Wire envelope type is stripped before going into the open reply.
+        assert "type" not in c.reply["status"]
+        status_fn.assert_called()
+    finally:
+        srv.shutdown()
+
+
+def test_new_reply_has_no_items_or_status(qtbot, server, session_name):
+    """new doesn't enrich the reply — items/status stay at their defaults."""
+    c = AsyncClient(session_name, make_msg({"type": "new", "force": True}))
+    qtbot.waitUntil(lambda: c.done, timeout=3000)
+    assert c.reply["type"] == "ok"
+    assert c.reply["items"] == []
+    assert c.reply["status"] is None
