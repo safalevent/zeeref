@@ -20,6 +20,7 @@ from zeeref.session import (
     OpenMessage,
     PingMessage,
     PROTOCOL_VERSION,
+    QuitMessage,
     SessionServer,
     StatusInfoMessage,
     StatusRequestMessage,
@@ -102,6 +103,11 @@ def mock_delete_fn():
 
 
 @pytest.fixture
+def mock_quit_fn():
+    return MagicMock()
+
+
+@pytest.fixture
 def server(
     qtbot,
     session_name,
@@ -115,6 +121,7 @@ def server(
     mock_insert_text_fn,
     mock_edit_fn,
     mock_delete_fn,
+    mock_quit_fn,
 ):
     srv = SessionServer(
         session_name,
@@ -128,6 +135,7 @@ def server(
         mock_insert_text_fn,
         mock_edit_fn,
         mock_delete_fn,
+        mock_quit_fn,
     )
     assert srv.start()
     yield srv
@@ -276,6 +284,7 @@ def _make_server(session_name, insert_fn):
         _mock_async_fn(),
         _mock_async_fn(),
         _mock_async_fn(),
+        MagicMock(),
     )
 
 
@@ -501,6 +510,7 @@ def test_new_reports_errors_from_callback(qtbot, session_name):
         _mock_async_fn(),
         _mock_async_fn(),
         _mock_async_fn(),
+        MagicMock(),
     )
     assert srv.start()
     try:
@@ -545,6 +555,7 @@ def test_open_reports_errors_from_callback(qtbot, session_name):
         _mock_async_fn(),
         _mock_async_fn(),
         _mock_async_fn(),
+        MagicMock(),
     )
     assert srv.start()
     try:
@@ -585,6 +596,7 @@ def test_writes_serialize_through_queue(qtbot, session_name, imgfile):
         _mock_async_fn(),
         _mock_async_fn(),
         _mock_async_fn(),
+        MagicMock(),
     )
     assert srv.start()
     try:
@@ -717,6 +729,7 @@ def test_reads_bypass_mutation_queue(qtbot, session_name, imgfile):
         _mock_async_fn(),
         _mock_async_fn(),
         _mock_async_fn(),
+        MagicMock(),
     )
     assert srv.start()
     try:
@@ -907,6 +920,7 @@ def test_add_text_serializes_with_other_writes(qtbot, session_name, imgfile):
         MagicMock(side_effect=slow_text),
         _mock_async_fn(),
         _mock_async_fn(),
+        MagicMock(),
     )
     assert srv.start()
     try:
@@ -1006,6 +1020,18 @@ def test_parse_delete_rejects_non_string_id():
     assert isinstance(result, ErrorMessage)
 
 
+def test_parse_quit():
+    result = parse_message('{"type": "quit"}')
+    assert isinstance(result, QuitMessage)
+
+
+def test_quit_acks_and_calls_quit_fn(qtbot, server, session_name, mock_quit_fn):
+    c = AsyncClient(session_name, make_msg({"type": "quit"}))
+    qtbot.waitUntil(lambda: c.done, timeout=3000)
+    assert c.reply["type"] == "ok"
+    qtbot.waitUntil(lambda: mock_quit_fn.called, timeout=3000)
+
+
 # -- Integration: edit/delete dispatch -------------------------------------
 
 
@@ -1045,6 +1071,7 @@ def test_edit_reports_unknown_id_error(qtbot, session_name):
         _mock_async_fn(),
         fn,
         _mock_async_fn(),
+        MagicMock(),
     )
     assert srv.start()
     try:
@@ -1085,6 +1112,7 @@ def test_delete_reports_unknown_id_error(qtbot, session_name):
         _mock_async_fn(),
         _mock_async_fn(),
         fn,
+        MagicMock(),
     )
     assert srv.start()
     try:
@@ -1118,6 +1146,7 @@ def test_add_reply_includes_created_ids(qtbot, session_name, imgfile):
         _mock_async_fn(),
         _mock_async_fn(),
         _mock_async_fn(),
+        MagicMock(),
     )
     assert srv.start()
     try:
@@ -1146,6 +1175,7 @@ def test_add_text_reply_includes_created_ids(qtbot, session_name):
         fn,
         _mock_async_fn(),
         _mock_async_fn(),
+        MagicMock(),
     )
     assert srv.start()
     try:
@@ -1197,6 +1227,7 @@ def test_edit_reply_includes_post_edit_items(qtbot, session_name):
         _mock_async_fn(),
         edit_fn,
         _mock_async_fn(),
+        MagicMock(),
     )
     assert srv.start()
     try:
@@ -1233,6 +1264,7 @@ def test_open_reply_includes_status(qtbot, session_name, tmp_path):
         _mock_async_fn(),
         _mock_async_fn(),
         _mock_async_fn(),
+        MagicMock(),
     )
     assert srv.start()
     try:

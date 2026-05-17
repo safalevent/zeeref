@@ -552,6 +552,16 @@ def _cmd_delete(args: argparse.Namespace) -> None:
         sock.disconnectFromServer()
 
 
+def _cmd_stop(args: argparse.Namespace) -> None:
+    sock, hello = _connect_or_die(args.session)
+    try:
+        reply = _request(sock, {"type": "quit"})
+        _exit_on_error_reply(reply)
+        _emit({"ok": True, "session": args.session, "stopped": True})
+    finally:
+        sock.disconnectFromServer()
+
+
 def _cmd_sessions(args: argparse.Namespace) -> None:
     sessions = _scan_sessions()
     _emit({"ok": True, "sessions": sessions})
@@ -770,6 +780,11 @@ def main() -> None:
     delete_p.add_argument("session", help="Session name")
     delete_p.add_argument("ids", nargs="+", help="One or more item ids")
     delete_p.set_defaults(func=_cmd_delete)
+
+    # stop
+    stop_p = sub.add_parser("stop", help="Shut down a running session (no spawn)")
+    stop_p.add_argument("session", help="Session name")
+    stop_p.set_defaults(func=_cmd_stop)
 
     args = parser.parse_args()
     args.func(args)

@@ -70,6 +70,9 @@ it before sending::
     Client: {"type": "delete", "ids": ["...", ...]}
     Server: {"type": "ok"} | {"type": "error", "message": "..."}
 
+    Client: {"type": "quit"}
+    Server: {"type": "ok"} (then the app exits)
+
 Bump ``PROTOCOL_VERSION`` on any wire-incompatible change.
 """
 
@@ -94,7 +97,7 @@ from zeeref.fileio.io import ImageInsert, TextInsert
 logger = logging.getLogger(__name__)
 
 
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
 
 
 # -- Messages --------------------------------------------------------------
@@ -195,6 +198,13 @@ class DeleteMessage(ClientMessage):
 
     type: str = "delete"
     ids: tuple[str, ...] = ()
+
+
+@dataclasses.dataclass(frozen=True)
+class QuitMessage(ClientMessage):
+    """Ask the session's app to exit after acking."""
+
+    type: str = "quit"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -583,6 +593,9 @@ def parse_message(line: str) -> ClientMessage | ErrorMessage:
             out_ids.append(v)
         return DeleteMessage(ids=tuple(out_ids))
 
+    if msg_type == "quit":
+        return QuitMessage()
+
     return ErrorMessage(message=f"unknown type: {msg_type}")
 
 
@@ -614,6 +627,7 @@ class SessionServer(QtCore.QObject):
         ],
         edit_fn: Callable[[list[dict], Callable[[list[str], list[str]], None]], None],
         delete_fn: Callable[[list[str], Callable[[list[str], list[str]], None]], None],
+        quit_fn: Callable[[], None],
         parent: QtCore.QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -628,6 +642,7 @@ class SessionServer(QtCore.QObject):
         self._insert_text_fn = insert_text_fn
         self._edit_fn = edit_fn
         self._delete_fn = delete_fn
+        self._quit_fn = quit_fn
         self._server = QtNetwork.QLocalServer(self)
         self._server.newConnection.connect(self._on_new_connection)
         self._connections: list[_SessionConnection] = []
@@ -687,6 +702,12 @@ class SessionServer(QtCore.QObject):
             return
         if isinstance(msg, ViewRequestMessage):
             conn.reply(self._view_fn())
+            return
+        if isinstance(msg, QuitMessage):
+            conn.reply(OkMessage())
+            # Defer to next event-loop tick so the reply finishes flushing
+            # before the app starts tearing down.
+            QtCore.QTimer.singleShot(0, self._quit_fn)
             return
         if isinstance(
             msg,

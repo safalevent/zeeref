@@ -20,6 +20,7 @@ zeeref-cli add-text SESSION "markdown text"        # auto-spawns
 zeeref-cli ping     SESSION
 zeeref-cli status   SESSION    # {loaded_file, item_count, dirty}
 zeeref-cli sessions            # list running sessions
+zeeref-cli stop     SESSION    # shut down a running session
 ```
 
 ## Reads (no spawn)

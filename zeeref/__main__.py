@@ -219,6 +219,7 @@ def main():
             insert_text_fn=bee.view.do_insert_text_with_callback,
             edit_fn=bee.view.do_edit_with_callback,
             delete_fn=bee.view.do_delete_with_callback,
+            quit_fn=app.quit,
         )
         if not session_server.start():
             print(
