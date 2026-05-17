@@ -32,7 +32,8 @@ def _pil_to_qimage(pil_img: Image.Image) -> QtGui.QImage:
         fmt = QtGui.QImage.Format.Format_RGBA8888
         channels = 4
     else:
-        pil_img = pil_img.convert("RGB")
+        if pil_img.mode != "RGB":
+            pil_img = pil_img.convert("RGB")
         fmt = QtGui.QImage.Format.Format_RGB888
         channels = 3
     data = pil_img.tobytes()
@@ -47,12 +48,13 @@ def generate_tiles(
     """Yield (tile_qimage, level, col, row) for each tile in the pyramid.
 
     Level 0 is full resolution. Each subsequent level halves the image.
-    Uses Qt for scaling (fast) and cropping.
+    Pyramid downsampling uses PIL LANCZOS; cropping into tiles uses Qt.
     Stops after the first level where the entire image fits in one tile.
     """
-    current = _pil_to_qimage(pil_img)
+    current_pil = pil_img
     level = 0
     while True:
+        current = _pil_to_qimage(current_pil)
         w = current.width()
         h = current.height()
         for row in range(ceil(h / TILE_SIZE)):
@@ -63,10 +65,9 @@ def generate_tiles(
                 yield (tile, level, col, row)
         if w <= TILE_SIZE and h <= TILE_SIZE:
             break
-        current = current.scaled(
-            max(1, w >> 1),
-            max(1, h >> 1),
-            transformMode=QtCore.Qt.TransformationMode.SmoothTransformation,
+        current_pil = current_pil.resize(
+            (max(1, w >> 1), max(1, h >> 1)),
+            resample=Image.Resampling.LANCZOS,
         )
         level += 1
 
