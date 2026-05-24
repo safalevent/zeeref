@@ -49,6 +49,9 @@ it before sending::
     Client: {"type": "open", "path": "...", "force": false}
     Server: {"type": "ok"} | {"type": "error", "message": "..."}
 
+    Client: {"type": "save", "path": "..." | null, "force": false}
+    Server: {"type": "ok", "status": {...}} | {"type": "error", "message": "..."}
+
     Client: {"type": "status"}
     Server: {"type": "status_info", "loaded_file": "..." | null,
              "item_count": N, "dirty": bool}
@@ -97,7 +100,7 @@ from zeeref.fileio.io import ImageInsert, TextInsert
 logger = logging.getLogger(__name__)
 
 
-PROTOCOL_VERSION = 6
+PROTOCOL_VERSION = 7
 
 
 # -- Messages --------------------------------------------------------------
@@ -147,6 +150,20 @@ class OpenMessage(ClientMessage):
 
     type: str = "open"
     path: str = ""
+    force: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class SaveMessage(ClientMessage):
+    """Save the running session's scene to a .zref file.
+
+    ``path`` is the target file; ``None`` means save to the session's
+    current backing file.  ``force`` permits overwriting a *different*
+    pre-existing file (not required to overwrite the current file).
+    """
+
+    type: str = "save"
+    path: str | None = None
     force: bool = False
 
 
@@ -540,6 +557,17 @@ def parse_message(line: str) -> ClientMessage | ErrorMessage:
             return ErrorMessage(message="'force' must be a boolean")
         return OpenMessage(path=path, force=force)
 
+    if msg_type == "save":
+        path = msg.get("path")
+        if path is not None and (not isinstance(path, str) or not path):
+            return ErrorMessage(
+                message="'save' path must be a non-empty string or omitted"
+            )
+        force = msg.get("force", False)
+        if not isinstance(force, bool):
+            return ErrorMessage(message="'force' must be a boolean")
+        return SaveMessage(path=path, force=force)
+
     if msg_type == "add":
         payload = msg.get("payload")
         if not isinstance(payload, list) or not payload:
@@ -618,6 +646,9 @@ class SessionServer(QtCore.QObject):
         ],
         new_fn: Callable[[bool, Callable[[list[str], list[str]], None]], None],
         open_fn: Callable[[Path, bool, Callable[[list[str], list[str]], None]], None],
+        save_fn: Callable[
+            [str | None, bool, Callable[[list[str], list[str]], None]], None
+        ],
         status_fn: Callable[[], StatusInfoMessage],
         list_fn: Callable[[], ItemsMessage],
         get_fn: Callable[[str], ItemMessage],
@@ -635,6 +666,7 @@ class SessionServer(QtCore.QObject):
         self._insert_fn = insert_fn
         self._new_fn = new_fn
         self._open_fn = open_fn
+        self._save_fn = save_fn
         self._status_fn = status_fn
         self._list_fn = list_fn
         self._get_fn = get_fn
@@ -716,6 +748,7 @@ class SessionServer(QtCore.QObject):
                 AddTextMessage,
                 NewMessage,
                 OpenMessage,
+                SaveMessage,
                 EditMessage,
                 DeleteMessage,
             ),
@@ -743,6 +776,9 @@ class SessionServer(QtCore.QObject):
         elif isinstance(msg, OpenMessage):
             logger.info("Session: opening %s (force=%s)", msg.path, msg.force)
             self._open_fn(Path(msg.path), msg.force, self._on_op_finished)
+        elif isinstance(msg, SaveMessage):
+            logger.info("Session: saving (path=%s, force=%s)", msg.path, msg.force)
+            self._save_fn(msg.path, msg.force, self._on_op_finished)
         elif isinstance(msg, EditMessage):
             logger.info("Session: editing %d item(s)", len(msg.edits))
             self._edit_fn(list(msg.edits), self._on_op_finished)
@@ -770,7 +806,7 @@ class SessionServer(QtCore.QObject):
         if isinstance(msg, EditMessage):
             fetched = [self._get_fn(entry["id"]).item for entry in msg.edits]
             items = tuple(it for it in fetched if it is not None)
-        elif isinstance(msg, OpenMessage):
+        elif isinstance(msg, (OpenMessage, SaveMessage)):
             status_msg = self._status_fn()
             status = {
                 k: v for k, v in dataclasses.asdict(status_msg).items() if k != "type"

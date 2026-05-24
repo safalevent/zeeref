@@ -40,9 +40,13 @@ zeeref-cli edit   SESSION ID  [--x ...] [--y ...] [--scale ...] \
                               [--caption ...] [--text ...]
 
 zeeref-cli delete SESSION ID [ID...]
+
+zeeref-cli save   SESSION [PATH.zref] [--force]
 ```
 
 `edit` is additive: only fields you pass are touched. Empty string or `null` on `title`/`caption`/`text` clears that metadata. Use `--stdin` for batch edits (JSON array of `{id, ...fields}`).
+
+`save` writes the live scene to a `.zref`. Omit the path to overwrite the session's current file (`status.loaded_file`); pass a path to save-as, which then becomes the session's file. `--force` is required only to overwrite a *different* existing file.
 
 ## Item shape (from `list` / `get`)
 
@@ -66,6 +70,7 @@ zeeref-cli delete SESSION ID [ID...]
 - `add` / `add-text` echo `ids` (list of newly-created item ids) — feed them straight into `edit`/`delete`.
 - `edit` echoes `items` (the post-edit snapshots) — confirm the change or read side effects without a follow-up `get`.
 - `open` echoes `status` (loaded_file, item_count, dirty) — no follow-up `status` call needed.
+- `save` echoes `path` (where it landed) and `status` (loaded_file, item_count, dirty=false) — confirm the write without a follow-up `status`.
 - `ping` echoes `protocol_version` and `app_version` from the server's hello.
 
 ## Notes

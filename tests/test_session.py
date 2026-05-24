@@ -21,6 +21,7 @@ from zeeref.session import (
     PingMessage,
     PROTOCOL_VERSION,
     QuitMessage,
+    SaveMessage,
     SessionServer,
     StatusInfoMessage,
     StatusRequestMessage,
@@ -61,6 +62,11 @@ def mock_new_fn():
 
 @pytest.fixture
 def mock_open_fn():
+    return _mock_async_fn()
+
+
+@pytest.fixture
+def mock_save_fn():
     return _mock_async_fn()
 
 
@@ -114,6 +120,7 @@ def server(
     mock_insert_fn,
     mock_new_fn,
     mock_open_fn,
+    mock_save_fn,
     mock_status_fn,
     mock_list_fn,
     mock_get_fn,
@@ -128,6 +135,7 @@ def server(
         mock_insert_fn,
         mock_new_fn,
         mock_open_fn,
+        mock_save_fn,
         mock_status_fn,
         mock_list_fn,
         mock_get_fn,
@@ -275,6 +283,7 @@ def _make_server(session_name, insert_fn):
     return SessionServer(
         session_name,
         insert_fn,
+        _mock_async_fn(),
         _mock_async_fn(),
         _mock_async_fn(),
         MagicMock(return_value=StatusInfoMessage()),
@@ -458,6 +467,35 @@ def test_parse_open_with_force():
     assert result.force is True
 
 
+def test_parse_save_path_less():
+    result = parse_message('{"type": "save"}')
+    assert isinstance(result, SaveMessage)
+    assert result.path is None
+    assert result.force is False
+
+
+def test_parse_save_with_path():
+    result = parse_message('{"type": "save", "path": "/tmp/a.zref"}')
+    assert isinstance(result, SaveMessage)
+    assert result.path == "/tmp/a.zref"
+
+
+def test_parse_save_with_force():
+    result = parse_message('{"type": "save", "path": "/tmp/a.zref", "force": true}')
+    assert isinstance(result, SaveMessage)
+    assert result.force is True
+
+
+def test_parse_save_rejects_empty_path():
+    result = parse_message('{"type": "save", "path": ""}')
+    assert isinstance(result, ErrorMessage)
+
+
+def test_parse_save_rejects_non_bool_force():
+    result = parse_message('{"type": "save", "force": "yes"}')
+    assert isinstance(result, ErrorMessage)
+
+
 # -- Integration: hello, status, new, open ---------------------------------
 
 
@@ -502,6 +540,7 @@ def test_new_reports_errors_from_callback(qtbot, session_name):
         session_name,
         _mock_async_fn(),
         new_fn,
+        _mock_async_fn(),
         _mock_async_fn(),
         MagicMock(return_value=StatusInfoMessage()),
         MagicMock(return_value=ItemsMessage(items=())),
@@ -548,6 +587,7 @@ def test_open_reports_errors_from_callback(qtbot, session_name):
         _mock_async_fn(),
         _mock_async_fn(),
         open_fn,
+        _mock_async_fn(),
         MagicMock(return_value=StatusInfoMessage()),
         MagicMock(return_value=ItemsMessage(items=())),
         MagicMock(return_value=ItemMessage(item=None)),
@@ -565,6 +605,65 @@ def test_open_reports_errors_from_callback(qtbot, session_name):
         )
         qtbot.waitUntil(lambda: c.done, timeout=3000)
         assert c.reply["type"] == "error"
+    finally:
+        srv.shutdown()
+
+
+def test_save_calls_save_fn(qtbot, server, session_name, mock_save_fn, mock_status_fn):
+    mock_status_fn.return_value = StatusInfoMessage(
+        loaded_file="/tmp/out.zref", item_count=3, dirty=False
+    )
+    c = AsyncClient(
+        session_name,
+        make_msg({"type": "save", "path": "/tmp/out.zref", "force": True}),
+    )
+    qtbot.waitUntil(lambda: c.done, timeout=3000)
+    assert c.reply["type"] == "ok"
+    # ok reply is enriched with the post-save status_info.
+    assert c.reply["status"]["loaded_file"] == "/tmp/out.zref"
+    assert c.reply["status"]["dirty"] is False
+    mock_save_fn.assert_called_once()
+    called_path, called_force, _ = mock_save_fn.call_args[0]
+    assert called_path == "/tmp/out.zref"
+    assert called_force is True
+
+
+def test_save_path_less_passes_none(qtbot, server, session_name, mock_save_fn):
+    c = AsyncClient(session_name, make_msg({"type": "save"}))
+    qtbot.waitUntil(lambda: c.done, timeout=3000)
+    assert c.reply["type"] == "ok"
+    mock_save_fn.assert_called_once()
+    called_path, _, _ = mock_save_fn.call_args[0]
+    assert called_path is None
+
+
+def test_save_reports_errors_from_callback(qtbot, session_name):
+    """When save_fn reports errors, reply is error."""
+    save_fn = MagicMock()
+    save_fn.side_effect = lambda path, force, on_done: on_done(
+        ["session has no backing file; provide a path"], []
+    )
+    srv = SessionServer(
+        session_name,
+        _mock_async_fn(),
+        _mock_async_fn(),
+        _mock_async_fn(),
+        save_fn,
+        MagicMock(return_value=StatusInfoMessage()),
+        MagicMock(return_value=ItemsMessage(items=())),
+        MagicMock(return_value=ItemMessage(item=None)),
+        MagicMock(return_value=ViewInfoMessage()),
+        _mock_async_fn(),
+        _mock_async_fn(),
+        _mock_async_fn(),
+        MagicMock(),
+    )
+    assert srv.start()
+    try:
+        c = AsyncClient(session_name, make_msg({"type": "save"}))
+        qtbot.waitUntil(lambda: c.done, timeout=3000)
+        assert c.reply["type"] == "error"
+        assert "backing file" in c.reply["message"]
     finally:
         srv.shutdown()
 
@@ -589,6 +688,7 @@ def test_writes_serialize_through_queue(qtbot, session_name, imgfile):
         MagicMock(side_effect=slow_add),
         MagicMock(side_effect=slow_new),
         MagicMock(side_effect=slow_open),
+        _mock_async_fn(),
         MagicMock(return_value=StatusInfoMessage()),
         MagicMock(return_value=ItemsMessage(items=())),
         MagicMock(return_value=ItemMessage(item=None)),
@@ -720,6 +820,7 @@ def test_reads_bypass_mutation_queue(qtbot, session_name, imgfile):
     srv = SessionServer(
         session_name,
         MagicMock(side_effect=slow_add),
+        _mock_async_fn(),
         _mock_async_fn(),
         _mock_async_fn(),
         MagicMock(return_value=StatusInfoMessage()),
@@ -913,6 +1014,7 @@ def test_add_text_serializes_with_other_writes(qtbot, session_name, imgfile):
         MagicMock(side_effect=slow_add),
         _mock_async_fn(),
         _mock_async_fn(),
+        _mock_async_fn(),
         MagicMock(return_value=StatusInfoMessage()),
         MagicMock(return_value=ItemsMessage(items=())),
         MagicMock(return_value=ItemMessage(item=None)),
@@ -1064,6 +1166,7 @@ def test_edit_reports_unknown_id_error(qtbot, session_name):
         _mock_async_fn(),
         _mock_async_fn(),
         _mock_async_fn(),
+        _mock_async_fn(),
         MagicMock(return_value=StatusInfoMessage()),
         MagicMock(return_value=ItemsMessage(items=())),
         MagicMock(return_value=ItemMessage(item=None)),
@@ -1105,6 +1208,7 @@ def test_delete_reports_unknown_id_error(qtbot, session_name):
         _mock_async_fn(),
         _mock_async_fn(),
         _mock_async_fn(),
+        _mock_async_fn(),
         MagicMock(return_value=StatusInfoMessage()),
         MagicMock(return_value=ItemsMessage(items=())),
         MagicMock(return_value=ItemMessage(item=None)),
@@ -1139,6 +1243,7 @@ def test_add_reply_includes_created_ids(qtbot, session_name, imgfile):
         fn,
         _mock_async_fn(),
         _mock_async_fn(),
+        _mock_async_fn(),
         MagicMock(return_value=StatusInfoMessage()),
         MagicMock(return_value=ItemsMessage(items=())),
         MagicMock(return_value=ItemMessage(item=None)),
@@ -1165,6 +1270,7 @@ def test_add_text_reply_includes_created_ids(qtbot, session_name):
     fn = MagicMock(side_effect=text_with_ids)
     srv = SessionServer(
         session_name,
+        _mock_async_fn(),
         _mock_async_fn(),
         _mock_async_fn(),
         _mock_async_fn(),
@@ -1220,6 +1326,7 @@ def test_edit_reply_includes_post_edit_items(qtbot, session_name):
         _mock_async_fn(),
         _mock_async_fn(),
         _mock_async_fn(),
+        _mock_async_fn(),
         MagicMock(return_value=StatusInfoMessage()),
         MagicMock(return_value=ItemsMessage(items=())),
         get_fn,
@@ -1254,6 +1361,7 @@ def test_open_reply_includes_status(qtbot, session_name, tmp_path):
     )
     srv = SessionServer(
         session_name,
+        _mock_async_fn(),
         _mock_async_fn(),
         _mock_async_fn(),
         _mock_async_fn(),

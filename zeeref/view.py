@@ -945,6 +945,56 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
             dialog=DialogOptions(label=f"Loading {filename}"),
         )
 
+    def do_save_with_callback(
+        self,
+        path: str | None,
+        force: bool,
+        on_done: Callable[[list[str], list[str]], None],
+    ) -> None:
+        """Save the scene to *path* (or the current file if None).
+
+        Mirrors the GUI save, but reports errors via *on_done* instead of
+        a modal dialog.  Used by the session IPC server.
+        """
+        if path is None:
+            target = self.filename
+            if target is None:
+                on_done(["session has no backing file; provide a path"], [])
+                return
+        else:
+            target = Path(path)
+            if not fileio.is_zref_file(target):
+                target = target.with_suffix(".zref")
+            is_current = (
+                self.filename is not None
+                and target.resolve() == self.filename.resolve()
+            )
+            if not force and not is_current and target.exists():
+                on_done([f"target exists: {target}; pass force=true to overwrite"], [])
+                return
+
+        if self.scene._scratch_file is None:
+            on_done(["session has no scratch file to save"], [])
+            return
+
+        snapshots = self.scene.snapshot_for_save()
+
+        def _wrapped(result: fileio.IOResult) -> None:
+            if result.errors:
+                on_done(list(result.errors), [])
+                return
+            self.on_saving_finished(result)
+            on_done([], [])
+
+        self.run_async(
+            fileio.save_zref,
+            target,
+            snapshots,
+            self.scene._scratch_file,
+            on_finished=_wrapped,
+            dialog=DialogOptions(label=f"Saving {target} (session)"),
+        )
+
     def get_session_status(self) -> StatusInfoMessage:
         """Snapshot the scene for the session IPC server."""
         from zeeref.session import StatusInfoMessage as _StatusInfoMessage

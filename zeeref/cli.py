@@ -427,6 +427,31 @@ def _cmd_open(args: argparse.Namespace) -> None:
         existing.disconnectFromServer()
 
 
+def _cmd_save(args: argparse.Namespace) -> None:
+    message: dict = {"type": "save", "force": args.force}
+    if args.path is not None:
+        target = Path(args.path).resolve()
+        if not target.parent.is_dir():
+            sys.exit(f"Error: directory not found: {target.parent}")
+        message["path"] = str(target)
+
+    sock, hello = _connect_or_die(args.session)
+    try:
+        reply = _request(sock, message)
+        _exit_on_error_reply(reply)
+        status = reply.get("status") or {}
+        _emit(
+            {
+                "ok": True,
+                "session": args.session,
+                "path": status.get("loaded_file"),
+                "status": status,
+            }
+        )
+    finally:
+        sock.disconnectFromServer()
+
+
 def _cmd_ping(args: argparse.Namespace) -> None:
     sock, hello = _connect_or_die(args.session)
     try:
@@ -719,6 +744,25 @@ def main() -> None:
         help="Discard unsaved changes if session is dirty",
     )
     open_p.set_defaults(func=_cmd_open)
+
+    # save
+    save_p = sub.add_parser(
+        "save", help="Save the running session's scene to a .zref (no spawn)"
+    )
+    save_p.add_argument("session", help="Session name")
+    save_p.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Target .zref path (omit to save to the session's current file)",
+    )
+    save_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite a different existing file "
+        "(not needed to overwrite the session's current file)",
+    )
+    save_p.set_defaults(func=_cmd_save)
 
     # ping
     ping_p = sub.add_parser("ping", help="Liveness check (no spawn)")
