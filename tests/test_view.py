@@ -814,48 +814,32 @@ def test_on_action_sample_color_when_multi_selection(view, item):
     view.scene.multi_select_item.lower_behind_selection.assert_called_once_with()
 
 
-@patch("PyQt6.QtWidgets.QWidget.create")
-@patch("PyQt6.QtWidgets.QWidget.destroy")
 @patch("PyQt6.QtWidgets.QWidget.show")
-def test_on_action_always_on_top_checked(show_mock, destroy_mock, create_mock, view):
+def test_on_action_always_on_top_checked(show_mock, view):
     view.on_action_always_on_top(True)
     assert view.parent.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
     show_mock.assert_called_once()
-    destroy_mock.assert_called_once()
-    create_mock.assert_called_once()
 
 
-@patch("PyQt6.QtWidgets.QWidget.create")
-@patch("PyQt6.QtWidgets.QWidget.destroy")
 @patch("PyQt6.QtWidgets.QWidget.show")
-def test_on_action_always_on_top_unchecked(show_mock, destroy_mock, create_mock, view):
+def test_on_action_always_on_top_unchecked(show_mock, view):
     view.on_action_always_on_top(False)
     assert not (view.parent.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
     show_mock.assert_called_once()
-    destroy_mock.assert_called_once()
-    create_mock.assert_called_once()
 
 
-@patch("PyQt6.QtWidgets.QWidget.create")
-@patch("PyQt6.QtWidgets.QWidget.destroy")
 @patch("PyQt6.QtWidgets.QWidget.show")
-def test_on_action_show_titlebar_checked(show_mock, destroy_mock, create_mock, view):
+def test_on_action_show_titlebar_checked(show_mock, view):
     view.on_action_show_titlebar(True)
     assert not (view.parent.windowFlags() & Qt.WindowType.FramelessWindowHint)
     show_mock.assert_called_once()
-    destroy_mock.assert_called_once()
-    create_mock.assert_called_once()
 
 
-@patch("PyQt6.QtWidgets.QWidget.create")
-@patch("PyQt6.QtWidgets.QWidget.destroy")
 @patch("PyQt6.QtWidgets.QWidget.show")
-def test_on_action_show_titlebar_unchecked(show_mock, destroy_mock, create_mock, view):
+def test_on_action_show_titlebar_unchecked(show_mock, view):
     view.on_action_show_titlebar(False)
     assert view.parent.windowFlags() & Qt.WindowType.FramelessWindowHint
     show_mock.assert_called_once()
-    destroy_mock.assert_called_once()
-    create_mock.assert_called_once()
 
 
 @patch("zeeref.view.ZeeGraphicsView.cursor")

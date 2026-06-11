@@ -374,14 +374,10 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
 
     def on_action_always_on_top(self, checked: bool) -> None:
         self.parent.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, on=checked)
-        self.parent.destroy()
-        self.parent.create()
         self.parent.show()
 
     def on_action_show_titlebar(self, checked: bool) -> None:
         self.parent.setWindowFlag(Qt.WindowType.FramelessWindowHint, on=not checked)
-        self.parent.destroy()
-        self.parent.create()
         self.parent.show()
 
     def on_action_move_window(self) -> None:
