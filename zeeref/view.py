@@ -152,7 +152,7 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
         # Load files given via command line
         if commandline_args.filenames:
             fn = Path(commandline_args.filenames[0])
-            if fn.suffix in (".zref", ".bee"):
+            if fn.suffix in (".zref", ".bee", ".pur"):
                 self.open_from_file(fn)
             else:
                 self.do_insert_images(commandline_args.filenames)
@@ -580,8 +580,14 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
     def open_from_file(self, filename: Path) -> None:
         logger.info(f"Opening file {filename}")
         self.clear_scene()
+        
+        if filename.suffix == ".pur":
+            loader = fileio.load_pur
+        else:
+            loader = fileio.load_zref_metadata
+            
         self.run_async(
-            fileio.load_zref_metadata,
+            loader,
             filename,
             self.scene,
             on_finished=self.on_loading_finished,
@@ -599,7 +605,7 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
         filename, f = QtWidgets.QFileDialog.getOpenFileName(
             parent=self,
             caption="Open file",
-            filter=f"{constants.APPNAME} File (*.zref)",
+            filter=f"{constants.APPNAME} File (*.zref);;PureRef File (*.pur)",
         )
         if filename:
             path = Path(filename).resolve()

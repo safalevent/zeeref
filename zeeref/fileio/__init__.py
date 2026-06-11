@@ -53,4 +53,17 @@ __all__ = [
     "insert_image_files",
     "insert_image_from_clipboard",
     "save_zref",
+    "load_pur",
 ]
+
+import logging
+
+from zeeref.fileio.pureref import PureRefIO
+
+logger = logging.getLogger(__name__)
+
+def load_pur(filename, scene, worker=None):
+    """Load PureRef file."""
+    logger.info(f'Loading PureRef file {filename}...')
+    io = PureRefIO(filename, scene, worker=worker)
+    io.read()

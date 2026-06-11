@@ -15,14 +15,19 @@
 
 import io
 import logging
+import ssl
 import tempfile
 from pathlib import Path
 from urllib.error import URLError
-from urllib import request
+from urllib import parse, request
 
+import certifi
+from lxml import etree
 from PyQt6 import QtCore
 
 from PIL import Image, ImageCms, ImageOps
+
+USER_AGENT = 'ZeeRef Reference Image Viewer'
 
 Image.MAX_IMAGE_PIXELS = None  # Qt's allocation limit handles this
 
@@ -100,8 +105,26 @@ def load_pil_from_source(path: Path | QtCore.QUrl) -> tuple[Image.Image | None, 
         return (load_pil(local), str(local))
 
     url = path.toEncoded().data().decode()
+    domain = ".".join(parse.urlparse(url).netloc.split(".")[-2:])
+    
+    # SSL context with certifi for proper certificate verification
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+
+    # Request with User-Agent header (needed for ArtStation, etc.)
+    headers = {'User-Agent': USER_AGENT}
+
+    if domain == 'pinterest.com':
+        try:
+            req = request.Request(url, headers=headers)
+            page_data = request.urlopen(req, context=ssl_context).read()
+            root = etree.HTML(page_data)
+            url = root.xpath("//img")[0].get('src')
+        except Exception as e:
+            logger.debug(f'Pinterest image download failed: {e}')
+            
     try:
-        imgdata = request.urlopen(url).read()
+        req = request.Request(url, headers=headers)
+        imgdata = request.urlopen(req, context=ssl_context).read()
     except URLError as e:
         logger.debug(f"Downloading image failed: {e.reason}")
         return (None, url)

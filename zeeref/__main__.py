@@ -76,6 +76,10 @@ class ZeeRefMainWindow(QtWidgets.QMainWindow):
             if not self.restoreGeometry(geom):
                 self.resize(default_window_size)
         self.setCentralWidget(self.view)
+        
+        from zeeref.utils import set_dark_titlebar
+        set_dark_titlebar(self)
+        
         self.show()
 
     def _edges_at(self, pos: QtCore.QPoint) -> Qt.Edge:

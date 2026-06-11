@@ -23,6 +23,13 @@ def pytest_configure(config):
 
     logging.config.dictConfig = MagicMock
 
+    # Disable translations during tests by setting locale to C
+    # This must be done before QApplication is created
+    import os
+    os.environ['LANGUAGE'] = 'C'
+    os.environ['LC_ALL'] = 'C'
+    os.environ['LANG'] = 'C'
+
 
 @pytest.fixture(autouse=True)
 def no_modal_dialogs():

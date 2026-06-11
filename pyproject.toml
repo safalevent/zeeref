@@ -10,21 +10,24 @@ include = ["zeeref*"]
 
 [project]
 name = "ZeeRef"
-version = "0.4.0"
-description = "A simple reference image viewer"
+version = "0.4.5"
+description = "A reference image viewer"
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
     { name = "Zack Gomez", email = "zack.gomez@gmail.com" },
     { name = "Rebecca Breu", email = "rebecca@rbreu.de" },
 ]
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.9"
 dependencies = [
+    "certifi",
+    "exif>=1.3.5",
+    "lxml>=5.1.0",
     "Pillow>=10.0.0",
-    "pyQt6-Qt6>=6.7.0,<=6.7.0",
-    "pyQt6>=6.7.0,<=6.7.0",
+    "pyQt6-Qt6>=6.7.0",
+    "pyQt6>=6.7.0",
     "mistune>=3.0.0",
-    "rectangle-packer>=2.0.1,<=2.0.2",
+    "rectangle-packer>=2.0.1",
 ]
 
 [project.optional-dependencies]

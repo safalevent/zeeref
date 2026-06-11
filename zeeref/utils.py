@@ -20,7 +20,7 @@ import re
 import threading
 from typing import Any
 
-from PyQt6 import QtCore, QtGui
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 
 def main_thread_only[T: Callable[..., Any]](func: T) -> T:
@@ -134,3 +134,24 @@ class ActionList(OrderedDict):
         if isinstance(key, int):
             key = list(self.keys())[key]
         return super().__getitem__(key)
+
+def set_dark_titlebar(window: QtWidgets.QWidget) -> None:
+    """Sets the native Windows title bar to dark mode."""
+    import sys
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        
+        hwnd = int(window.winId())
+        DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        set_window_attribute = ctypes.windll.dwmapi.DwmSetWindowAttribute
+        value = ctypes.c_int(1)
+        
+        res = set_window_attribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ctypes.byref(value), ctypes.sizeof(value))
+        if res != 0:
+            # fallback to 19 for older Windows 10 builds
+            set_window_attribute(hwnd, 19, ctypes.byref(value), ctypes.sizeof(value))
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).debug(f"Failed to set dark title bar: {e}")
