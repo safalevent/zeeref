@@ -97,6 +97,8 @@ menu_structure = [
             MENU_SEPARATOR,
             "gif_reverse",
             MENU_SEPARATOR,
+            "show_color_gamut",
+            MENU_SEPARATOR,
             "sample_color",
         ],
     },

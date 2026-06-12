@@ -484,6 +484,11 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
             if action and action.qaction:
                 action.qaction.setChecked(selected[0]._gif_reversed)
 
+    def on_action_show_color_gamut(self) -> None:
+        selected = self.scene.selectedItems(user_only=True)
+        if selected and selected[0].is_image:
+            widgets.color_gamut.GamutDialog(self, selected[0])
+
     def on_action_crop(self) -> None:
         self.scene.crop_items()
 

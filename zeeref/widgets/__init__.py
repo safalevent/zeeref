@@ -19,6 +19,7 @@ from zeeref.widgets import (  # noqa: F401
     debuglog,
     settings,
     welcome_overlay,
+    color_gamut,
 )
 from zeeref.widgets.common import (
     ZeeNotification,
@@ -30,6 +31,7 @@ from zeeref.widgets.common import (
     SceneToPixmapExporterDialog,
 )
 from zeeref.widgets.debuglog import DebugLogDialog
+from zeeref.widgets.color_gamut import GamutDialog
 
 __all__ = [
     "ZeeNotification",
@@ -40,4 +42,5 @@ __all__ = [
     "HelpDialog",
     "SampleColorWidget",
     "SceneToPixmapExporterDialog",
+    "GamutDialog",
 ]

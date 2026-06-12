@@ -19,7 +19,9 @@ text).
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Callable
+from functools import cached_property
 import copy
 import logging
 import math
@@ -323,6 +325,68 @@ class ZeePixmapItem(ZeeItemMixin, QtWidgets.QGraphicsPixmapItem):
 
     def __str__(self) -> str:
         return f'Image "{self.filename}" {self._image_width} x {self._image_height}'
+
+    @cached_property
+    def color_gamut(self) -> dict[tuple[int, int], int]:
+        from zeeref.fileio.tilecache import get_tile_cache
+        from zeeref.fileio.tiling import TILE_SIZE
+
+        logger.debug(f"Calculating color gamut for {self}")
+        gamut: defaultdict[tuple[int, int], int] = defaultdict(int)
+
+        if self._is_gif or not self.pixmap().isNull():
+            # Image or GIF frame is fully loaded in memory
+            img = self.pixmap().toImage()
+        else:
+            # For tiled images, stitch at an appropriate resolution (around 1000px max)
+            L = 0
+            while L < self._max_level and max(self._image_width >> L, self._image_height >> L) > 1000:
+                L += 1
+
+            level_w = max(1, self._image_width >> L)
+            level_h = max(1, self._image_height >> L)
+
+            from math import ceil
+            from zeeref.types.tile import TileKey
+
+            num_cols = ceil(level_w / TILE_SIZE)
+            num_rows = ceil(level_h / TILE_SIZE)
+
+            keys = set()
+            for row in range(num_rows):
+                for col in range(num_cols):
+                    keys.add(TileKey(self.image_id, L, col, row))
+
+            try:
+                tile_cache = get_tile_cache()
+                tiles = tile_cache.request_blocking(keys)
+            except AssertionError:
+                # TileCache not initialized (e.g. in tests/fallback)
+                tiles = {}
+
+            img = QtGui.QImage(level_w, level_h, QtGui.QImage.Format.Format_ARGB32)
+            img.fill(QtGui.QColor(0, 0, 0, 0))
+            painter = QtGui.QPainter(img)
+            for key, pixmap in tiles.items():
+                painter.drawPixmap(key.col * TILE_SIZE, key.row * TILE_SIZE, pixmap)
+            painter.end()
+
+        # Don't evaluate every pixel for larger images:
+        step = max(1, int(max(img.width(), img.height()) / 1000))
+        logger.debug(f"Considering every {step}. row/column")
+
+        for i in range(0, img.width(), step):
+            for j in range(0, img.height(), step):
+                rgb = img.pixelColor(i, j)
+                rgbtuple = (rgb.red(), rgb.blue(), rgb.green())
+                if (5 < rgb.alpha()
+                        and min(rgbtuple) < 250 and max(rgbtuple) > 5):
+                    # Only consider pixels that aren't close to
+                    # transparent, white or black
+                    gamut[(rgb.hue(), rgb.saturation())] += 1
+
+        logger.debug(f"Got {len(gamut)} color gamut values")
+        return dict(gamut)
 
     @property
     def crop(self) -> QtCore.QRectF:

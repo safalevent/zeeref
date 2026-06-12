@@ -860,3 +860,35 @@ def test_crop_mode_mouse_press_and_drag(qapp, scene, item):
     item.mouseMoveEvent(move_event2)
     assert item.crop_temp == QtCore.QRectF(100, 100, 100, 100)
 
+
+def test_color_gamut_finds_colors(qapp):
+    img = QtGui.QImage(10, 10, QtGui.QImage.Format.Format_ARGB32)
+    img.fill(QtGui.QColor(0, 0, 0))
+    img.setPixelColor(1, 1, QtGui.QColor(255, 0, 0))
+    img.setPixelColor(5, 5, QtGui.QColor(0, 255, 0))
+    img.setPixelColor(5, 6, QtGui.QColor(0, 50, 0))
+    item = ZeePixmapItem(img, "foo.png")
+    assert item.color_gamut == {(0, 255): 1, (120, 255): 2}
+
+
+def test_color_gamut_ignores_almost_black(qapp):
+    img = QtGui.QImage(10, 10, QtGui.QImage.Format.Format_ARGB32)
+    img.fill(QtGui.QColor(3, 3, 3))
+    item = ZeePixmapItem(img, "foo.png")
+    assert item.color_gamut == {}
+
+
+def test_color_gamut_ignores_almost_white(qapp):
+    img = QtGui.QImage(10, 10, QtGui.QImage.Format.Format_ARGB32)
+    img.fill(QtGui.QColor(253, 253, 253))
+    item = ZeePixmapItem(img, "foo.png")
+    assert item.color_gamut == {}
+
+
+def test_color_gamut_ignores_almost_transparent(qapp):
+    img = QtGui.QImage(10, 10, QtGui.QImage.Format.Format_ARGB32)
+    img.fill(QtGui.QColor(255, 0, 0, 3))
+    item = ZeePixmapItem(img, "foo.png")
+    assert item.color_gamut == {}
+
+
