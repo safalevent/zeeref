@@ -119,6 +119,7 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
         self.active_mode: int | None = None
         self.draw_item: ZeePathItem | None = None
         self.draw_current_stroke: dict[str, Any] | None = None
+        self._tablet_pressure: float = 1.0
         self.draw_brush_size = float(self.settings.valueOrDefault("Draw/brush_size"))
         # Parse Draw/brush_color from #AARRGGBB hex to list[int]
         brush_color_str = self.settings.valueOrDefault("Draw/brush_color")
@@ -1526,6 +1527,14 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
                 return True
         return super().event(event)
 
+    def tabletEvent(self, event: QtGui.QTabletEvent | None) -> None:
+        if event is not None and self.active_mode == self.DRAW_MODE:
+            self._tablet_pressure = event.pressure()
+            # Don't accept — let Qt synthesize mouse events for drawing
+            event.ignore()
+        elif event is not None:
+            super().tabletEvent(event)
+
     def mousePressEvent(self, event: QtGui.QMouseEvent | None) -> None:
         assert event is not None
 
@@ -1533,7 +1542,7 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
             if event.button() == Qt.MouseButton.LeftButton:
                 assert self.draw_item is not None
                 pos = self.mapToScene(event.pos())
-                pressure = getattr(event, "pressure", lambda: 1.0)() if hasattr(event, "pressure") else 1.0
+                pressure = self._tablet_pressure
                 self.draw_current_stroke = {
                     "color": self.draw_brush_color,
                     "base_size": self.draw_brush_size,
@@ -1595,7 +1604,7 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
 
         if self.active_mode == self.DRAW_MODE and self.draw_current_stroke is not None:
             pos = self.mapToScene(event.pos())
-            pressure = getattr(event, "pressure", lambda: 1.0)() if hasattr(event, "pressure") else 1.0
+            pressure = self._tablet_pressure
             self.draw_current_stroke["points"].append(
                 {"x": pos.x(), "y": pos.y(), "pressure": pressure}
             )
@@ -1644,6 +1653,7 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
                 self.draw_item.add_stroke(self.draw_current_stroke)
                 self.draw_item.temp_stroke = None
                 self.draw_current_stroke = None
+            self._tablet_pressure = 1.0
             event.accept()
             return
 

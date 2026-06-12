@@ -205,7 +205,7 @@ class ZeePixmapItem(ZeeItemMixin, QtWidgets.QGraphicsPixmapItem):
     CROP_HANDLE_SIZE: int = 15
 
     crop_temp: QtCore.QRectF | None
-    crop_mode_move: Callable[[], QtCore.QRectF] | None
+    crop_mode_move: Callable[[], QtCore.QRectF] | QtCore.QRectF | None
     crop_mode_event_start: QtCore.QPointF | None
 
     def __init__(
@@ -1001,7 +1001,7 @@ class ZeePixmapItem(ZeeItemMixin, QtWidgets.QGraphicsPixmapItem):
         self.prepareGeometryChange()
         self.crop_mode = True
         self.crop_temp = QtCore.QRectF(self.crop)
-        self.crop_mode_move: Callable[[], QtCore.QRectF] | None = None
+        self.crop_mode_move: Callable[[], QtCore.QRectF] | QtCore.QRectF | None = None
         self.crop_mode_event_start: QtCore.QPointF | None = None
         self.grabKeyboard()
         self.update()
@@ -1043,6 +1043,10 @@ class ZeePixmapItem(ZeeItemMixin, QtWidgets.QGraphicsPixmapItem):
             if edge().contains(event.pos()):
                 self.set_cursor(self.get_crop_edge_cursor(edge))
                 return
+        assert self.crop_temp is not None
+        if self.crop_temp.contains(event.pos()):
+            self.set_cursor(Qt.CursorShape.SizeAllCursor)
+            return
         self.unset_cursor()
 
     def mousePressEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent | None) -> None:
@@ -1063,12 +1067,50 @@ class ZeePixmapItem(ZeeItemMixin, QtWidgets.QGraphicsPixmapItem):
                 self.crop_mode_event_start = event.pos()
                 self.crop_mode_move = edge
                 return
-        # Click not in handle, end cropping mode:
         assert self.crop_temp is not None
-        self.exit_crop_mode(confirm=self.crop_temp.contains(event.pos()))
+        if self.crop_temp.contains(event.pos()):
+            self.crop_mode_event_start = event.pos()
+            self.crop_mode_move = self.crop_temp
+            return
+        # Click not in handle, end cropping mode:
+        self.exit_crop_mode(confirm=True)
+
+    def mouseDoubleClickEvent(
+        self, event: QtWidgets.QGraphicsSceneMouseEvent | None
+    ) -> None:
+        assert event is not None
+        if not self.crop_mode:
+            return super().mouseDoubleClickEvent(event)
+
+        event.accept()
+        assert self.crop_temp is not None
+        if self.crop_temp.contains(event.pos()):
+            self.exit_crop_mode(confirm=True)
+
+    def ensure_crop_box_is_inside(self, point: QtCore.QPointF) -> QtCore.QPointF:
+        """Returns the modified point that ensures that the crop rectangle is
+        still within the pixmap.
+
+        The point passed is assumed to be the top
+        left crop rectangle position.
+        """
+        assert self.crop_temp is not None
+        max_x_pos = self._image_width - self.crop_temp.width()
+        max_y_pos = self._image_height - self.crop_temp.height()
+
+        if point.x() < 0:
+            point.setX(0.0)
+        elif point.x() > max_x_pos:
+            point.setX(max_x_pos)
+
+        if point.y() < 0:
+            point.setY(0.0)
+        elif point.y() > max_y_pos:
+            point.setY(max_y_pos)
+        return point
 
     def ensure_point_within_crop_bounds(
-        self, point: QtCore.QPointF, handle: Callable[[], QtCore.QRectF]
+        self, point: QtCore.QPointF, handle: Callable[[], QtCore.QRectF] | QtCore.QRectF | None
     ) -> QtCore.QPointF:
         """Returns the point, or the nearest point within the pixmap."""
         assert self.crop_temp is not None
@@ -1111,42 +1153,47 @@ class ZeePixmapItem(ZeeItemMixin, QtWidgets.QGraphicsPixmapItem):
                 return
             assert self.crop_temp is not None
             diff = event.pos() - self.crop_mode_event_start
-            if self.crop_mode_move == self.crop_handle_topleft:
+            if self.crop_mode_move == self.crop_temp:
+                new = self.ensure_crop_box_is_inside(
+                    self.crop_temp.topLeft() + diff
+                )
+                self.crop_temp.moveTo(new)
+            elif self.crop_mode_move == self.crop_handle_topleft:
                 new = self.ensure_point_within_crop_bounds(
                     self.crop_temp.topLeft() + diff, self.crop_mode_move
                 )
                 self.crop_temp.setTopLeft(new)
-            if self.crop_mode_move == self.crop_handle_bottomleft:
+            elif self.crop_mode_move == self.crop_handle_bottomleft:
                 new = self.ensure_point_within_crop_bounds(
                     self.crop_temp.bottomLeft() + diff, self.crop_mode_move
                 )
                 self.crop_temp.setBottomLeft(new)
-            if self.crop_mode_move == self.crop_handle_bottomright:
+            elif self.crop_mode_move == self.crop_handle_bottomright:
                 new = self.ensure_point_within_crop_bounds(
                     self.crop_temp.bottomRight() + diff, self.crop_mode_move
                 )
                 self.crop_temp.setBottomRight(new)
-            if self.crop_mode_move == self.crop_handle_topright:
+            elif self.crop_mode_move == self.crop_handle_topright:
                 new = self.ensure_point_within_crop_bounds(
                     self.crop_temp.topRight() + diff, self.crop_mode_move
                 )
                 self.crop_temp.setTopRight(new)
-            if self.crop_mode_move == self.crop_edge_top:
+            elif self.crop_mode_move == self.crop_edge_top:
                 new = self.ensure_point_within_crop_bounds(
                     self.crop_temp.topLeft() + diff, self.crop_mode_move
                 )
                 self.crop_temp.setTop(new.y())
-            if self.crop_mode_move == self.crop_edge_left:
+            elif self.crop_mode_move == self.crop_edge_left:
                 new = self.ensure_point_within_crop_bounds(
                     self.crop_temp.topLeft() + diff, self.crop_mode_move
                 )
                 self.crop_temp.setLeft(new.x())
-            if self.crop_mode_move == self.crop_edge_bottom:
+            elif self.crop_mode_move == self.crop_edge_bottom:
                 new = self.ensure_point_within_crop_bounds(
                     self.crop_temp.bottomLeft() + diff, self.crop_mode_move
                 )
                 self.crop_temp.setBottom(new.y())
-            if self.crop_mode_move == self.crop_edge_right:
+            elif self.crop_mode_move == self.crop_edge_right:
                 new = self.ensure_point_within_crop_bounds(
                     self.crop_temp.topRight() + diff, self.crop_mode_move
                 )

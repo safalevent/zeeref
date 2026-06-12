@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-from PyQt6 import QtCore, QtGui
+from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtCore import Qt
 
 from zeeref.items import ZeePixmapItem, item_registry
@@ -621,8 +621,9 @@ def test_mouse_press_event_crop_mode_outside_handle_inside_crop(mouse_mock, qapp
     event.pos.return_value = QtCore.QPointF(50, 50)
 
     item.mousePressEvent(event)
-    assert item.crop_mode_move is None
-    item.exit_crop_mode.assert_called_once_with(confirm=True)
+    assert item.crop_mode_move == item.crop_temp
+    assert item.crop_mode_event_start == QtCore.QPointF(50, 50)
+    item.exit_crop_mode.assert_not_called()
     mouse_mock.assert_not_called()
     event.accept.assert_called_once_with()
 
@@ -640,7 +641,7 @@ def test_mouse_press_event_crop_mode_outside_handle_outside_crop(
 
     item.mousePressEvent(event)
     assert item.crop_mode_move is None
-    item.exit_crop_mode.assert_called_once_with(confirm=False)
+    item.exit_crop_mode.assert_called_once_with(confirm=True)
     mouse_mock.assert_not_called()
     event.accept.assert_called_once_with()
 
@@ -813,3 +814,49 @@ def test_create_copy_gif(qapp):
         assert copy._is_gif is True
         assert copy._gif_reversed is True
         mock_load.assert_called_once()
+
+
+def test_ensure_crop_box_is_inside(qapp, item):
+    item.crop_temp = QtCore.QRectF(2, 2, 4, 4)
+    item._image_width = 10
+    item._image_height = 10
+    assert item.ensure_crop_box_is_inside(QtCore.QPointF(1, 1)) == QtCore.QPointF(1, 1)
+    assert item.ensure_crop_box_is_inside(QtCore.QPointF(-1, -2)) == QtCore.QPointF(0, 0)
+    assert item.ensure_crop_box_is_inside(QtCore.QPointF(8, 9)) == QtCore.QPointF(6, 6)
+
+
+def test_crop_mode_mouse_press_and_drag(qapp, scene, item):
+    scene.addItem(item)
+    item._image_width = 200
+    item._image_height = 200
+    item.enter_crop_mode()
+    item.crop_temp = QtCore.QRectF(10, 10, 100, 100)
+
+    # Hover move inside the crop box (but outside handles/edges) should set cursor to SizeAllCursor
+    hover_event = MagicMock()
+    hover_event.pos.return_value = QtCore.QPointF(50, 50)
+    with patch.object(item, "set_cursor") as mock_set_cursor:
+        item.hoverMoveEvent(hover_event)
+        mock_set_cursor.assert_called_once_with(Qt.CursorShape.SizeAllCursor)
+
+    # Click inside the crop box
+    press_event = MagicMock()
+    press_event.pos.return_value = QtCore.QPointF(50, 50)
+    press_event.button.return_value = Qt.MouseButton.LeftButton
+    item.mousePressEvent(press_event)
+    assert item.crop_mode_move == item.crop_temp
+    assert item.crop_mode_event_start == QtCore.QPointF(50, 50)
+
+    # Drag/Move
+    move_event = MagicMock()
+    move_event.pos.return_value = QtCore.QPointF(55, 60)
+    item.mouseMoveEvent(move_event)
+    assert item.crop_temp == QtCore.QRectF(15, 20, 100, 100)
+    assert item.crop_mode_event_start == QtCore.QPointF(55, 60)
+
+    # Drag further exceeding bounds (max_x = 200 - 100 = 100, max_y = 200 - 100 = 100)
+    move_event2 = MagicMock()
+    move_event2.pos.return_value = QtCore.QPointF(200, 200)
+    item.mouseMoveEvent(move_event2)
+    assert item.crop_temp == QtCore.QRectF(100, 100, 100, 100)
+
