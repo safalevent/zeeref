@@ -87,7 +87,10 @@ class PureRefIO:
             # Load image data using PIL (ZeeRef backend)
             import io as builtin_io
             try:
-                pil_img = Image.open(builtin_io.BytesIO(bytes(image.pngBinary)))
+                raw_bytes = bytes(image.pngBinary)
+                pil_img = Image.open(builtin_io.BytesIO(raw_bytes))
+                if pil_img.format == "GIF" and getattr(pil_img, "is_animated", False):
+                    pil_img.custom_raw_bytes = raw_bytes
                 pil_img.load()
             except Exception as e:
                 logger.warning(f'Failed to load image data: {e}')
@@ -144,12 +147,14 @@ class PureRefIO:
         t.y = transform.y
         
         pos = QtCore.QPointF(0, 0) # Used only if x/y not present
+        raw_bytes = getattr(pil_img, "custom_raw_bytes", None)
         snap = _insert_image(
             pil_img,
             transform.source,
             pos,
             io,
             self.scene,
-            transforms=t
+            transforms=t,
+            raw_bytes=raw_bytes,
         )
         return snap

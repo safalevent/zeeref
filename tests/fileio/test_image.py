@@ -170,3 +170,39 @@ def test_load_pil_animated_gif(qapp, tmp_path):
     assert getattr(img, "n_frames", 1) == 2
     assert hasattr(img, "custom_raw_bytes")
     assert len(img.custom_raw_bytes) > 0
+
+
+def test_pureref_import_gif(qapp, tmp_path):
+    from unittest.mock import MagicMock, patch
+    from zeeref.fileio.pureref import PureRefIO
+
+    pur_file_mock = MagicMock()
+    pur_image = MagicMock()
+    pur_image.pngBinary = b"fake_gif_binary"
+    pur_image.transforms = [
+        MagicMock(matrix=[1.0, 0.0, 0.0, 1.0], zLayer=1.0, x=100.0, y=200.0, source="dummy_src")
+    ]
+    pur_file_mock.images = [pur_image]
+    pur_file_mock.unsupported_metadata = False
+
+    pil_img_mock = MagicMock()
+    pil_img_mock.size = (200, 100)
+    pil_img_mock.format = "GIF"
+    pil_img_mock.is_animated = True
+
+    scene_mock = MagicMock()
+    scene_mock._scratch_file = str(tmp_path / "scratch.db")
+
+    with patch("zeeref.fileio.vendor.purformat.PurFile", return_value=pur_file_mock), \
+         patch("PIL.Image.open", return_value=pil_img_mock) as mock_open, \
+         patch("zeeref.fileio.pureref._insert_image") as mock_insert:
+
+        reader = PureRefIO("dummy.pur", scene_mock)
+        reader.read()
+
+        mock_open.assert_called_once()
+        assert pil_img_mock.custom_raw_bytes == b"fake_gif_binary"
+
+        mock_insert.assert_called_once()
+        call_kwargs = mock_insert.call_args[1]
+        assert call_kwargs.get("raw_bytes") == b"fake_gif_binary"

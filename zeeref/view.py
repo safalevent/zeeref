@@ -1253,14 +1253,17 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
             self.scene.paste_from_internal_clipboard(pos)
             return
 
-        # Check for file URLs (e.g. files copied in a file manager)
+        # Check for URLs (local files or remote URLs, e.g. copied from browser/file manager)
         if mime.hasUrls():
             urls = mime.urls()
-            image_urls = [
-                u
-                for u in urls
-                if u.isLocalFile() and not fileio.is_zref_file(Path(u.toLocalFile()))
-            ]
+            image_urls = []
+            for u in urls:
+                if u.isLocalFile():
+                    local_path = Path(u.toLocalFile())
+                    if not fileio.is_zref_file(local_path):
+                        image_urls.append(u)
+                else:
+                    image_urls.append(u)
             if image_urls:
                 viewport_pos = self.mapFromGlobal(self.cursor().pos())
                 self.do_insert_images(image_urls, viewport_pos)

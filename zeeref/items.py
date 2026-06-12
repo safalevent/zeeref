@@ -782,6 +782,10 @@ class ZeePixmapItem(ZeeItemMixin, QtWidgets.QGraphicsPixmapItem):
         if self.flip() == -1:
             item.do_flip()
         item.crop = self.crop
+        if self._is_gif:
+            item._is_gif = True
+            item._gif_reversed = self._gif_reversed
+            item._load_gif_async()
         return item
 
     def reset_crop(self) -> None:

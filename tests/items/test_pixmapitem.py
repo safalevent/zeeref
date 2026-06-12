@@ -799,3 +799,17 @@ def test_sample_color_at_returns_none_when_transparent(qapp, scene):
     key = TileKey(item.image_id, 0, 0, 0)
     item.on_tile_loaded(key, QtGui.QPixmap.fromImage(img))
     assert item.sample_color_at(QtCore.QPointF(2, 2)) is None
+
+
+def test_create_copy_gif(qapp):
+    item = ZeePixmapItem(QtGui.QImage(), "foo.gif")
+    item._is_gif = True
+    item._gif_reversed = True
+    # mock _load_gif_async to avoid actual db loading during unit test
+    with patch.object(ZeePixmapItem, "_load_gif_async") as mock_load:
+        copy = item.create_copy()
+        assert copy.image_id == item.image_id
+        assert copy.filename == "foo.gif"
+        assert copy._is_gif is True
+        assert copy._gif_reversed is True
+        mock_load.assert_called_once()

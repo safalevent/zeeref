@@ -1773,5 +1773,26 @@ def test_draw_undo_draw_undo(view):
     assert len(view.draw_item.strokes) == 0
 
 
+@patch("zeeref.view.ZeeGraphicsView.do_insert_images")
+@patch("PyQt6.QtGui.QClipboard.mimeData")
+def test_on_action_paste_multiple_remote_urls(mimedata_mock, do_insert_mock, view):
+    mimedata = QtCore.QMimeData()
+    url_zref = QtCore.QUrl.fromLocalFile("D:/test.zref")
+    url_local = QtCore.QUrl.fromLocalFile("D:/test.png")
+    url_remote = QtCore.QUrl("http://example.com/anim.gif")
+    mimedata.setUrls([url_zref, url_local, url_remote])
+
+    mimedata_mock.return_value = mimedata
+    view.cancel_active_modes = MagicMock()
+
+    view.on_action_paste()
+
+    do_insert_mock.assert_called_once()
+    called_urls = do_insert_mock.call_args[0][0]
+    assert url_local in called_urls
+    assert url_remote in called_urls
+    assert url_zref not in called_urls
+
+
 
 
