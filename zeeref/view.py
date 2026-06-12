@@ -542,11 +542,11 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
             return
         assert isinstance(result, fileio.LoadResult)
         self.filename = result.filename
+        self._start_tile_cache()
         for snap in result.snapshots:
             item = create_item_from_snapshot(snap)
             self.scene.addItem(item)
         self.on_action_fit_scene()
-        self._start_tile_cache()
 
     def _start_tile_cache(self) -> None:
         """Start the TileCache for the current scratch file."""

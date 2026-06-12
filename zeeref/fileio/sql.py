@@ -381,7 +381,7 @@ class SQLiteIO:
             self.ex(
                 "INSERT OR IGNORE INTO images (id, width, height, format) "
                 "VALUES (?, ?, ?, ?)",
-                (snap.image_id, snap.width, snap.height, "png"),
+                (snap.image_id, snap.width, snap.height, snap.format),
             )
 
         self.ex(

@@ -765,3 +765,35 @@ def test_sqliteio_read_raises_error_when_file_empty(scene, tmpfile):
 
     # should not create a file on reading!
     assert os.path.isfile(tmpfile) is False
+
+
+def test_sqliteio_write_inserts_new_pixmap_item_gif(tmpfile, scene):
+    item = ZeePixmapItem(QtGui.QImage(), filename="bee.gif")
+    item._is_gif = True
+    scene.addItem(item)
+    io = SQLiteIO(tmpfile, create_new=True)
+    io.create_schema_on_new()
+
+    # Pre-write tile data as GIF
+    io.ex(
+        "INSERT OR IGNORE INTO images (id, width, height, format) VALUES (?, ?, ?, ?)",
+        (item.image_id, 10, 10, "gif"),
+    )
+    io.ex(
+        "INSERT INTO tiles (image_id, level, col, row, data) VALUES (?, 0, 0, 0, ?)",
+        (item.image_id, b"fake-gif-bytes"),
+    )
+    io.connection.commit()
+
+    io.create_new = False
+    io.write(scene.snapshot_for_save())
+
+    assert io.fetchone("SELECT id FROM items WHERE id = ?", (item.save_id,))
+    result = io.fetchone(
+        "SELECT type, images.format, tiles.data FROM items "
+        "JOIN images ON items.image_id = images.id "
+        "JOIN tiles ON images.id = tiles.image_id"
+    )
+    assert result[0] == "pixmap"
+    assert result[1] == "gif"
+    assert result[2] == b"fake-gif-bytes"
