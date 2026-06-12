@@ -160,6 +160,15 @@ class ZeeSettings(QtCore.QSettings):
             "cast": int,
             "validate": lambda x: x >= 16,
         },
+        "Draw/brush_size": {
+            "default": 14.0,
+            "cast": float,
+            "validate": lambda x: 1.0 <= x <= 500.0,
+        },
+        "Draw/brush_color": {
+            "default": "#32f0f2f5",
+            "cast": str,
+        },
     }
 
     def __init__(self):

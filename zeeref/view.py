@@ -119,8 +119,19 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
         self.active_mode: int | None = None
         self.draw_item: ZeePathItem | None = None
         self.draw_current_stroke: dict[str, Any] | None = None
-        self.draw_brush_size: float = 12.0
-        self.draw_brush_color: list[int] = [240, 242, 245, 50]
+        self.draw_brush_size = float(self.settings.valueOrDefault("Draw/brush_size"))
+        # Parse Draw/brush_color from #AARRGGBB hex to list[int]
+        brush_color_str = self.settings.valueOrDefault("Draw/brush_color")
+        color = QtGui.QColor(brush_color_str)
+        if color.isValid():
+            self.draw_brush_color = [
+                color.red(),
+                color.green(),
+                color.blue(),
+                color.alpha(),
+            ]
+        else:
+            self.draw_brush_color = [240, 242, 245, 50]
         self.event_start: QtCore.QPointF = QtCore.QPointF()
         self.event_anchor: QtCore.QPointF = QtCore.QPointF()
         self.event_inverted: bool = False
@@ -1110,6 +1121,7 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
                 color.blue(),
                 color.alpha(),
             ]
+            self.settings.setValue("Draw/brush_color", color.name(QtGui.QColor.NameFormat.HexArgb))
 
     def on_action_set_brush_size(self) -> None:
         size, ok = QtWidgets.QInputDialog.getInt(
@@ -1122,6 +1134,7 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
         )
         if ok:
             self.draw_brush_size = float(size)
+            self.settings.setValue("Draw/brush_size", self.draw_brush_size)
 
     def enter_draw_mode(self) -> None:
         self.cancel_active_modes()
