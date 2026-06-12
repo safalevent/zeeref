@@ -142,6 +142,7 @@ class ZeeRefMainWindow(QtWidgets.QMainWindow):
         geom = self.saveGeometry()
         self.view.settings.setValue("MainWindow/geometry", geom)
         if self.view.scene._scratch_file:
+            self.view._stop_tile_cache()
             delete_scratch_file(self.view.scene._scratch_file)
             self.view.scene._scratch_file = None
         event.accept()

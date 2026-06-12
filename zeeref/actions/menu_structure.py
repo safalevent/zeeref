@@ -24,6 +24,7 @@ menu_structure = [
             "save_as",
             MENU_SEPARATOR,
             "export_scene",
+            "export_images",
         ],
     },
     {

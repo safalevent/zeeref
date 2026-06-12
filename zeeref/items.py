@@ -467,7 +467,10 @@ class ZeePixmapItem(ZeeItemMixin, QtWidgets.QGraphicsPixmapItem):
         return d
 
     def get_filename_for_export(
-        self, imgformat: str, save_id_default: str | None = None
+        self,
+        imgformat: str,
+        save_id_default: str | None = None,
+        no_filename_idx: int | None = None,
     ) -> str:
         save_id = self.save_id or save_id_default
         assert save_id is not None
@@ -475,9 +478,19 @@ class ZeePixmapItem(ZeeItemMixin, QtWidgets.QGraphicsPixmapItem):
         short_id = save_id[:8]
         if self.filename:
             basename = os.path.splitext(os.path.basename(self.filename))[0]
-            return f"{short_id}-{basename}.{imgformat}"
+            import re
+            basename = re.sub(r"[\<\>\:\"\/\\\|\?\*]", "_", basename)
+            basename = re.sub(r"[\x00-\x1f]", "", basename)
+            basename = basename.strip(" .")
+            if basename:
+                return f"{short_id}-{basename}.{imgformat}"
+
+        import datetime
+        date_str = datetime.date.today().strftime("%Y-%m-%d")
+        if no_filename_idx is not None:
+            return f"{date_str}-{no_filename_idx}.{imgformat}"
         else:
-            return f"{short_id}.{imgformat}"
+            return f"{date_str}.{imgformat}"
 
     def get_imgformat(self, img: QtGui.QImage) -> str:
         """Determines the format for storing this image."""

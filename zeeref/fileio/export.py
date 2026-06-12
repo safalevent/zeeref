@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -25,10 +26,15 @@ from .errors import ZeeFileIOError
 from zeeref.types.snapshot import IOResult
 from zeeref import widgets
 from zeeref.logging import getLogger
+from zeeref.fileio.sql import SQLiteIO
+from zeeref.fileio.tilecache import get_tile_cache
+from zeeref.fileio.tiling import TILE_SIZE
+from zeeref.types.tile import TileKey
 
 if TYPE_CHECKING:
     from zeeref.fileio.thread import ThreadedIO
     from zeeref.scene import ZeeGraphicsScene
+    from zeeref.items import ZeePixmapItem
 
 
 logger = getLogger(__name__)
@@ -174,3 +180,162 @@ class SceneToPixmapExporter(SceneExporterBase):
         logger.debug("Export finished")
         self.emit_progress(worker, 1)
         self.emit_finished(worker, filename, [])
+
+
+class ImagesToDirectoryExporter(ExporterBase):
+    """Export all images to a folder.
+
+    Not registered in the registry as it is accessed via its own menu entry,
+    not auto-detected by file extension.
+    """
+
+    def __init__(self, scene: ZeeGraphicsScene, dirname: Path) -> None:
+        self.scene: ZeeGraphicsScene = scene
+        self.dirname: Path = dirname
+        # If there are selected image items, export only them; otherwise export all.
+        selected_items = [
+            item for item in self.scene.selectedItems()
+            if getattr(item, "is_image", False)
+        ]
+        if selected_items:
+            # Keep original order if possible, or sort them?
+            # scene.selectedItems() returns them in arbitrary order, but we can filter all items
+            # in scene order to keep order consistent.
+            all_pixmaps = self.scene.items_by_type("pixmap")
+            self.items = [item for item in all_pixmaps if item in selected_items] # type: ignore
+        else:
+            self.items = list(self.scene.items_by_type("pixmap"))  # type: ignore
+
+        self.num_total: int = len(self.items)
+        self.start_from: int = 0
+        self.handle_existing: str | None = None
+
+    def export(self, worker: ThreadedIO | None = None) -> None:
+        logger.debug(f"Exporting images to {self.dirname}")
+        logger.debug(f"Starting at {self.start_from}")
+
+        self.emit_begin_processing(worker, self.num_total)
+        self.emit_progress(worker, self.start_from)
+
+        # Precompute consecutive indices for nameless images
+        import os.path
+        import re
+        nameless_indices = {}
+        nameless_count = 0
+        for idx, item in enumerate(self.items):
+            has_valid_name = False
+            if item.filename:
+                basename = os.path.splitext(os.path.basename(item.filename))[0]
+                basename = re.sub(r"[\<\>\:\"\/\\\|\?\*]", "_", basename)
+                basename = re.sub(r"[\x00-\x1f]", "", basename)
+                basename = basename.strip(" .")
+                if basename:
+                    has_valid_name = True
+            if not has_valid_name:
+                nameless_count += 1
+                nameless_indices[idx] = nameless_count
+
+        # Ensure directory exists
+        try:
+            self.dirname.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            self.handle_export_error(self.dirname, e, worker)
+            return
+
+        assert self.scene._scratch_file is not None
+        io = SQLiteIO(self.scene._scratch_file, readonly=True)
+        try:
+            for i, item in enumerate(self.items[self.start_from :], start=self.start_from):
+                if worker and worker.canceled:
+                    logger.debug("Export canceled")
+                    self.emit_finished(worker, self.dirname, [])
+                    return
+
+                # Determine format and read/stitch bytes
+                row = io.fetchone("SELECT format FROM images WHERE id=?", (item.image_id,))
+                imgformat = row[0] if row else "png"
+
+                if imgformat == "gif":
+                    if item._gif_bytes:
+                        pixmap_bytes = item._gif_bytes
+                    else:
+                        row_tile = io.fetchone(
+                            "SELECT data FROM tiles WHERE image_id=? AND level=0 AND col=0 AND row=0",
+                            (item.image_id,),
+                        )
+                        pixmap_bytes = bytes(row_tile[0]) if row_tile else b""
+                elif not item.pixmap().isNull():
+                    pixmap_bytes, imgformat = item.pixmap_to_bytes()
+                else:
+                    # Stitch
+                    width = item._image_width
+                    height = item._image_height
+                    tile_cache = get_tile_cache()
+
+                    keys = set()
+                    num_cols = math.ceil(width / TILE_SIZE)
+                    num_rows = math.ceil(height / TILE_SIZE)
+                    for r in range(num_rows):
+                        for c in range(num_cols):
+                            keys.add(TileKey(item.image_id, 0, c, r))
+
+                    tiles = tile_cache.request_blocking(keys)
+
+                    img = QtGui.QImage(width, height, QtGui.QImage.Format.Format_ARGB32)
+                    img.fill(QtGui.QColor(0, 0, 0, 0))
+                    painter = QtGui.QPainter(img)
+                    for key, pixmap in tiles.items():
+                        painter.drawPixmap(key.col * TILE_SIZE, key.row * TILE_SIZE, pixmap)
+                    painter.end()
+
+                    imgformat = item.get_imgformat(img)
+                    barray = QtCore.QByteArray()
+                    buffer = QtCore.QBuffer(barray)
+                    buffer.open(QtCore.QIODevice.OpenModeFlag.WriteOnly)
+                    img.save(buffer, imgformat.upper(), quality=90)
+                    pixmap_bytes = barray.data()
+
+                no_filename_idx = nameless_indices.get(i)
+                filename = item.get_filename_for_export(
+                    imgformat, no_filename_idx=no_filename_idx
+                )
+                path = self.dirname / filename
+                path_exists = path.exists()
+
+                if path_exists:
+                    logger.debug(f"File already exists: {path}")
+                    if self.handle_existing is None:
+                        self.start_from = i
+                        self.emit_user_input_required(worker, str(path))
+                        return
+                    else:
+                        if self.handle_existing == "skip":
+                            self.handle_existing = None
+                            logger.debug("Skipping file")
+                            continue
+                        elif self.handle_existing == "skip_all":
+                            logger.debug("Skipping file")
+                            continue
+                        elif self.handle_existing == "overwrite":
+                            self.handle_existing = None
+                            logger.debug("Overwrite file")
+                        elif self.handle_existing == "overwrite_all":
+                            logger.debug("Overwrite file")
+
+                logger.debug(f"Writing file: {path}")
+                try:
+                    path.write_bytes(pixmap_bytes)
+                except OSError as e:
+                    self.handle_export_error(path, e, worker)
+                    return
+
+                self.emit_progress(worker, i)
+        except ZeeFileIOError:
+            raise
+        except Exception as e:
+            self.handle_export_error(self.dirname, e, worker)
+            return
+        finally:
+            io._close_connection()
+
+        self.emit_finished(worker, self.dirname, [])

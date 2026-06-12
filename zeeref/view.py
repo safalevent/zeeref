@@ -43,7 +43,7 @@ from zeeref.config import CommandlineArgs, ZeeSettings, KeyboardSettings
 from zeeref import constants
 from zeeref import fileio
 from zeeref.fileio.errors import IMG_LOADING_ERROR_MSG
-from zeeref.fileio.export import exporter_registry
+from zeeref.fileio.export import exporter_registry, ImagesToDirectoryExporter
 from zeeref.fileio.io import ImageResult, stitch_image
 from zeeref.fileio.tilecache import TileCache, get_tile_cache, set_tile_cache
 from zeeref import widgets
@@ -683,9 +683,9 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
         if old_filename != result.filename and self.scene._scratch_file:
             new_swp = fileio.derive_swp_path(result.filename)
             if self.scene._scratch_file != new_swp:
+                self._stop_tile_cache()
                 os.rename(self.scene._scratch_file, new_swp)
                 self.scene._scratch_file = new_swp
-                self._stop_tile_cache()
                 self._start_tile_cache()
 
     def do_save(self, filename: Path) -> None:
@@ -768,6 +768,41 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
                 "Problem writing file",
                 f"<p>Problem writing file {result.filename}</p><p>{err_msg}</p>",
             )
+
+    def on_action_export_images(self) -> None:
+        directory = str(self.filename.parent) if self.filename else None
+        dir_path = QtWidgets.QFileDialog.getExistingDirectory(
+            parent=self,
+            caption="Export Images",
+            directory=directory,
+        )
+
+        if not dir_path:
+            return
+
+        logger.debug(f"Got export directory {dir_path}")
+        self.exporter = ImagesToDirectoryExporter(self.scene, Path(dir_path))
+        self.worker = fileio.ThreadedIO(self.exporter.export)
+        self.worker.user_input_required.connect(self.on_export_images_file_exists)
+        self.worker.finished.connect(self.on_export_finished)
+        self.progress = widgets.ZeeProgressDialog(
+            f"Exporting to {dir_path}",
+            worker=self.worker,
+            parent=self,
+        )
+        self.worker.start()
+
+    def on_export_images_file_exists(self, filename: str) -> None:
+        dlg = widgets.ExportImagesFileExistsDialog(self, filename)
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            self.exporter.handle_existing = dlg.get_answer()
+            directory = self.exporter.dirname
+            self.progress = widgets.ZeeProgressDialog(
+                f"Exporting to {directory}",
+                worker=self.worker,
+                parent=self,
+            )
+            self.worker.start()
 
     def on_action_quit(self) -> None:
         self.app.quit()

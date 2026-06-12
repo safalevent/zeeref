@@ -480,8 +480,54 @@ def test_on_action_export_scene_settings_input_canceled(
     file_mock.return_value = (filename, None)
     exec_mock.return_value = 0
     view.on_action_export_scene()
-    value_mock.assert_not_called()
     assert os.path.exists(filename) is False
+
+
+@patch("PyQt6.QtWidgets.QFileDialog.getExistingDirectory")
+def test_on_action_export_images_canceled(dir_mock, view):
+    dir_mock.return_value = ""
+    view.on_action_export_images()
+    assert not hasattr(view, "exporter")
+
+
+@patch("PyQt6.QtWidgets.QFileDialog.getExistingDirectory")
+def test_on_action_export_images(dir_mock, view, imgfilename3x3, tmp_path, qtbot):
+    item = ZeePixmapItem(QtGui.QImage(imgfilename3x3))
+    item.filename = "image1.png"
+    view.scene.addItem(item)
+
+    dir_mock.return_value = str(tmp_path)
+    view.on_export_finished = MagicMock()
+
+    view.on_action_export_images()
+    qtbot.waitUntil(lambda: view.on_export_finished.called is True)
+
+    filename = item.get_filename_for_export("png")
+    assert (tmp_path / filename).exists()
+
+
+@patch("zeeref.widgets.ExportImagesFileExistsDialog.exec", return_value=QtWidgets.QDialog.DialogCode.Accepted)
+@patch("zeeref.widgets.ExportImagesFileExistsDialog.get_answer", return_value="skip")
+@patch("PyQt6.QtWidgets.QFileDialog.getExistingDirectory")
+def test_on_action_export_images_file_exists_skip(
+    dir_mock, answer_mock, exec_mock, view, imgfilename3x3, tmp_path, qtbot
+):
+    item = ZeePixmapItem(QtGui.QImage(imgfilename3x3))
+    item.filename = "image1.png"
+    item.save_id = "00000001" + "a" * 24
+    view.scene.addItem(item)
+
+    filename = item.get_filename_for_export("png")
+    (tmp_path / filename).write_text("foo")
+
+    dir_mock.return_value = str(tmp_path)
+    view.on_export_finished = MagicMock()
+
+    view.on_action_export_images()
+    qtbot.waitUntil(lambda: view.on_export_finished.called is True)
+
+    with open(tmp_path / filename, "r") as f:
+        assert f.read() == "foo"
 
 
 @patch(

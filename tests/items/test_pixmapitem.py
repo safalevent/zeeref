@@ -95,13 +95,29 @@ def test_get_filename_for_export_when_save_id_and_filename(item):
 def test_get_filename_for_export_when_save_id_and_no_filename(item):
     item.filename = None
     item.save_id = "abcdef0123456789abcdef0123456789"
-    assert item.get_filename_for_export("jpg", "dd" * 16) == "abcdef01.jpg"
+    import datetime
+    date_str = datetime.date.today().strftime("%Y-%m-%d")
+    assert item.get_filename_for_export("jpg", "dd" * 16) == f"{date_str}.jpg"
+
+
+def test_get_filename_for_export_when_save_id_no_filename_with_index(item):
+    item.filename = None
+    item.save_id = "abcdef0123456789abcdef0123456789"
+    import datetime
+    date_str = datetime.date.today().strftime("%Y-%m-%d")
+    assert item.get_filename_for_export("jpg", "dd" * 16, no_filename_idx=5) == f"{date_str}-5.jpg"
 
 
 def test_get_filename_for_export_when_save_id_and_no_default(item):
     item.filename = "foo.png"
     item.save_id = "abcdef0123456789abcdef0123456789"
     assert item.get_filename_for_export("jpg") == "abcdef01-foo.jpg"
+
+
+def test_get_filename_for_export_sanitizes_invalid_characters(item):
+    item.filename = "foo:bar?q=123.png"
+    item.save_id = "abcdef0123456789abcdef0123456789"
+    assert item.get_filename_for_export("jpg") == "abcdef01-foo_bar_q=123.jpg"
 
 
 def test_get_imgformat_test_with_real_image(qapp, imgfilename3x3, item, settings):
