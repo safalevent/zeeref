@@ -1812,5 +1812,46 @@ def test_on_action_paste_multiple_remote_urls(mimedata_mock, do_insert_mock, vie
     assert url_zref not in called_urls
 
 
+def test_key_press_event_draw_mode_enter(view):
+    view.active_mode = view.DRAW_MODE
+    view.exit_draw_mode = MagicMock()
+    event = QtGui.QKeyEvent(
+        QtCore.QEvent.Type.KeyPress,
+        Qt.Key.Key_Return,
+        Qt.KeyboardModifier.NoModifier
+    )
+    view.keyPressEvent(event)
+    view.exit_draw_mode.assert_called_once_with(commit=True)
+    assert event.isAccepted()
+
+
+def test_key_press_event_draw_mode_escape(view):
+    view.active_mode = view.DRAW_MODE
+    view.exit_draw_mode = MagicMock()
+    event = QtGui.QKeyEvent(
+        QtCore.QEvent.Type.KeyPress,
+        Qt.Key.Key_Escape,
+        Qt.KeyboardModifier.NoModifier
+    )
+    view.keyPressEvent(event)
+    view.exit_draw_mode.assert_called_once_with(commit=False)
+    assert event.isAccepted()
+
+
+def test_mouse_press_event_crop_mode_right_click(view):
+    crop_item_mock = MagicMock()
+    view.scene.crop_item = crop_item_mock
+    event = QtGui.QMouseEvent(
+        QtCore.QEvent.Type.MouseButtonPress,
+        QtCore.QPointF(10, 10),
+        Qt.MouseButton.RightButton,
+        Qt.MouseButton.RightButton,
+        Qt.KeyboardModifier.NoModifier
+    )
+    view.mousePressEvent(event)
+    crop_item_mock.exit_crop_mode.assert_called_once_with(confirm=True)
+    assert event.isAccepted()
+
+
 
 

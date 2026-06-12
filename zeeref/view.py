@@ -1570,6 +1570,12 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
             event.accept()
             return
 
+        if self.scene.crop_item is not None:
+            if event.button() == Qt.MouseButton.RightButton:
+                self.scene.crop_item.exit_crop_mode(confirm=True)
+                event.accept()
+                return
+
         if self.mousePressEventMainControls(event):
             return
 
@@ -1694,6 +1700,15 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
 
     def keyPressEvent(self, event: QtGui.QKeyEvent | None) -> None:
         assert event is not None
+        if self.active_mode == self.DRAW_MODE:
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self.exit_draw_mode(commit=True)
+                event.accept()
+                return
+            elif event.key() == Qt.Key.Key_Escape:
+                self.exit_draw_mode(commit=False)
+                event.accept()
+                return
         if self.keyPressEventMainControls(event):
             return
         if self.active_mode == self.SAMPLE_COLOR_MODE:
