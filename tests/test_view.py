@@ -814,6 +814,24 @@ def test_on_action_sample_color_when_multi_selection(view, item):
     view.scene.multi_select_item.lower_behind_selection.assert_called_once_with()
 
 
+@patch("zeeref.widgets.ZeeNotification")
+def test_on_action_show_filename(notification_mock, view, imgfilename3x3):
+    item = ZeePixmapItem(QtGui.QImage(imgfilename3x3), filename="C:/foo/bar.png")
+    view.scene.addItem(item)
+    item.setSelected(True)
+    view.on_action_show_filename()
+    notification_mock.assert_called_once_with(view, "bar.png")
+
+
+@patch("zeeref.widgets.ZeeNotification")
+def test_on_action_show_filename_no_filename(notification_mock, view, imgfilename3x3):
+    item = ZeePixmapItem(QtGui.QImage(imgfilename3x3), filename=None)
+    view.scene.addItem(item)
+    item.setSelected(True)
+    view.on_action_show_filename()
+    notification_mock.assert_called_once_with(view, "Non-named Temporary Image")
+
+
 @patch("PyQt6.QtWidgets.QWidget.show")
 def test_on_action_always_on_top_checked(show_mock, view):
     view.on_action_always_on_top(True)

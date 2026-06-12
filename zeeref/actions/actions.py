@@ -303,6 +303,13 @@ actions = ActionList(
             group="active_when_single_image",
         ),
         Action(
+            id="show_filename",
+            text="Show &Filename",
+            shortcuts=["F"],
+            callback="on_action_show_filename",
+            group="active_when_single_image",
+        ),
+        Action(
             id="sample_color",
             text="Sample Color",
             shortcuts=["S"],

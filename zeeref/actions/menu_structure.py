@@ -98,6 +98,7 @@ menu_structure = [
             "gif_reverse",
             MENU_SEPARATOR,
             "show_color_gamut",
+            "show_filename",
             MENU_SEPARATOR,
             "sample_color",
         ],

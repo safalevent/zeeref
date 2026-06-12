@@ -489,6 +489,16 @@ class ZeeGraphicsView(MainControlsMixin, QtWidgets.QGraphicsView, ActionsMixin):
         if selected and selected[0].is_image:
             widgets.color_gamut.GamutDialog(self, selected[0])
 
+    def on_action_show_filename(self) -> None:
+        selected = self.scene.selectedItems(user_only=True)
+        if selected:
+            item = selected[0]
+            filename = getattr(item, "filename", None)
+            if filename:
+                widgets.ZeeNotification(self, Path(filename).name)
+            elif getattr(item, "is_image", False):
+                widgets.ZeeNotification(self, "Non-named Temporary Image")
+
     def on_action_crop(self) -> None:
         self.scene.crop_items()
 
