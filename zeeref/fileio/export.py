@@ -15,9 +15,14 @@
 
 from __future__ import annotations
 
+import base64
+import io as python_io
 import math
 from pathlib import Path
 from typing import TYPE_CHECKING
+from xml.etree import ElementTree as ET
+
+from PIL import Image, ImageSequence
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
@@ -34,7 +39,7 @@ from zeeref.types.tile import TileKey
 if TYPE_CHECKING:
     from zeeref.fileio.thread import ThreadedIO
     from zeeref.scene import ZeeGraphicsScene
-    from zeeref.items import ZeePixmapItem
+    from zeeref.items import ZeePixmapItem, ZeeTextItem
 
 
 logger = getLogger(__name__)
@@ -179,6 +184,221 @@ class SceneToPixmapExporter(SceneExporterBase):
 
         logger.debug("Export finished")
         self.emit_progress(worker, 1)
+        self.emit_finished(worker, filename, [])
+
+
+@register_exporter
+class SceneToSVGExporter(SceneExporterBase):
+    TYPE = "svg"
+
+    def get_user_input(self, parent: QtWidgets.QWidget) -> bool:
+        self.size = self.default_size
+        return True
+
+    def _get_textstyles(self, item: ZeeTextItem) -> list[str]:
+        fontstylemap = {
+            QtGui.QFont.Style.StyleNormal: "normal",
+            QtGui.QFont.Style.StyleItalic: "italic",
+            QtGui.QFont.Style.StyleOblique: "oblique",
+        }
+
+        font = item.font()
+        fontsize = font.pointSize() * item.scale()
+        families = ", ".join(font.families()) if font.families() else font.family()
+        fontstyle = fontstylemap.get(font.style(), "normal")
+
+        return [
+            "white-space:pre",
+            f"font-size:{fontsize}pt",
+            f"font-family:{families}",
+            f"font-weight:{font.weight()}",
+            f"font-stretch:{font.stretch()}",
+            f"font-style:{fontstyle}",
+        ]
+
+    def render_to_svg(self, worker: ThreadedIO | None = None) -> ET.Element | None:
+        svg = ET.Element(
+            "svg",
+            attrib={
+                "width": str(self.size.width()),
+                "height": str(self.size.height()),
+                "xmlns": "http://www.w3.org/2000/svg",
+                "xmlns:xlink": "http://www.w3.org/1999/xlink",
+            },
+        )
+
+        rect = self.scene.itemsBoundingRect()
+        offset = rect.topLeft() - QtCore.QPointF(self.margin, self.margin)
+
+        for i, item in enumerate(sorted(self.scene.items(), key=lambda x: x.zValue())):
+            if not hasattr(item, "TYPE"):
+                continue
+
+            pos = item.pos() - offset
+            anchor = pos
+
+            if item.TYPE == "text":
+                styles = self._get_textstyles(item)
+                element = ET.Element(
+                    "text",
+                    attrib={"style": ";".join(styles), "dominant-baseline": "hanging"},
+                )
+                element.text = item.toPlainText().strip()
+
+            elif item.TYPE == "pixmap":
+                width = item.crop.width() * item.scale()
+                height = item.crop.height() * item.scale()
+
+                # Retrieve format and read/stitch bytes
+                if item._is_gif:
+                    if item._gif_bytes:
+                        pixmap_bytes = item._gif_bytes
+                    else:
+                        assert self.scene._scratch_file is not None
+                        io = SQLiteIO(self.scene._scratch_file, readonly=True)
+                        try:
+                            row_tile = io.fetchone(
+                                "SELECT data FROM tiles WHERE image_id=? AND level=0 AND col=0 AND row=0",
+                                (item.image_id,),
+                            )
+                            pixmap_bytes = bytes(row_tile[0]) if row_tile else b""
+                        finally:
+                            io._close_connection()
+                    imgformat = "gif"
+
+                    # Crop GIF frames if cropped
+                    if item.crop.width() < item._image_width or item.crop.height() < item._image_height:
+                        try:
+                            im = Image.open(python_io.BytesIO(pixmap_bytes))
+                            durations = []
+                            frames = []
+                            for frame in ImageSequence.Iterator(im):
+                                durations.append(frame.info.get("duration", 100))
+                                frames.append(frame.crop((
+                                    int(item.crop.left()),
+                                    int(item.crop.top()),
+                                    int(item.crop.right()),
+                                    int(item.crop.bottom())
+                                )))
+                            out = python_io.BytesIO()
+                            if len(frames) == 1:
+                                frames[0].save(out, format="GIF")
+                            else:
+                                frames[0].save(
+                                    out,
+                                    format="GIF",
+                                    save_all=True,
+                                    append_images=frames[1:],
+                                    duration=durations,
+                                    loop=0
+                                )
+                            pixmap_bytes = out.getvalue()
+                        except Exception as e:
+                            logger.exception(f"Failed to crop GIF frames: {e}")
+                else:
+                    if not item.pixmap().isNull():
+                        pm = item.pixmap()
+                        pm_cropped = pm.copy(item.crop.toRect())
+                        img = pm_cropped.toImage()
+                        imgformat = item.get_imgformat(img)
+                        barray = QtCore.QByteArray()
+                        buffer = QtCore.QBuffer(barray)
+                        buffer.open(QtCore.QIODevice.OpenModeFlag.WriteOnly)
+                        img.save(buffer, imgformat.upper(), quality=90)
+                        pixmap_bytes = barray.data()
+                    else:
+                        # Stitch tiled image
+                        img_w = item._image_width
+                        img_h = item._image_height
+                        tile_cache = get_tile_cache()
+
+                        keys = set()
+                        num_cols = math.ceil(img_w / TILE_SIZE)
+                        num_rows = math.ceil(img_h / TILE_SIZE)
+                        for r in range(num_rows):
+                            for c in range(num_cols):
+                                keys.add(TileKey(item.image_id, 0, c, r))
+
+                        tiles = tile_cache.request_blocking(keys)
+
+                        img = QtGui.QImage(img_w, img_h, QtGui.QImage.Format.Format_ARGB32)
+                        img.fill(QtGui.QColor(0, 0, 0, 0))
+                        painter = QtGui.QPainter(img)
+                        for key, pixmap in tiles.items():
+                            painter.drawPixmap(key.col * TILE_SIZE, key.row * TILE_SIZE, pixmap)
+                        painter.end()
+
+                        # Crop the stitched image
+                        img_cropped = img.copy(item.crop.toRect())
+                        imgformat = item.get_imgformat(img_cropped)
+                        barray = QtCore.QByteArray()
+                        buffer = QtCore.QBuffer(barray)
+                        buffer.open(QtCore.QIODevice.OpenModeFlag.WriteOnly)
+                        img_cropped.save(buffer, imgformat.upper(), quality=90)
+                        pixmap_bytes = barray.data()
+
+                pixmap_b64 = base64.b64encode(pixmap_bytes).decode("ascii")
+                element = ET.Element(
+                    "image",
+                    attrib={
+                        "xlink:href": f"data:image/{imgformat};base64,{pixmap_b64}",
+                        "width": str(width),
+                        "height": str(height),
+                        "image-rendering": (
+                            "crisp-edges" if item.scale() > 2 else "optimizeQuality"
+                        ),
+                    },
+                )
+                pos = pos + item.crop.topLeft()
+            else:
+                continue
+
+            transforms = []
+            if item.flip() == -1:
+                transforms.append(f"translate({anchor.x()} {anchor.y()})")
+                transforms.append(f"scale({item.flip()} 1)")
+                transforms.append(f"translate(-{anchor.x()} -{anchor.y()})")
+            transforms.append(
+                f"rotate({item.rotation()} {anchor.x()} {anchor.y()})"
+            )
+
+            element.set("transform", " ".join(transforms))
+            element.set("x", str(pos.x()))
+            element.set("y", str(pos.y()))
+            element.set("opacity", str(item.opacity()))
+
+            svg.append(element)
+            self.emit_progress(worker, i)
+            if worker and worker.canceled:
+                return None
+
+        return svg
+
+    def export(self, filename: Path, worker: ThreadedIO | None = None) -> None:
+        logger.debug(f"Exporting scene to {filename}")
+        self.emit_begin_processing(worker, len(self.scene.items()))
+        svg = self.render_to_svg(worker)
+
+        if worker and worker.canceled:
+            logger.debug("Export canceled")
+            self.emit_finished(worker, filename, [])
+            return
+
+        if svg is None:
+            self.handle_export_error(filename, "Export canceled or failed", worker)
+            return
+
+        tree = ET.ElementTree(svg)
+        ET.indent(tree, space="  ")
+
+        try:
+            with open(filename, "w", encoding="utf-8") as f:
+                tree.write(f, encoding="unicode", xml_declaration=True)
+        except OSError as e:
+            self.handle_export_error(filename, e, worker)
+            return
+
+        logger.debug("Export finished")
         self.emit_finished(worker, filename, [])
 
 
